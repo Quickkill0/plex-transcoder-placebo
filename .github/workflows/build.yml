@@ -25,7 +25,7 @@ jobs:
   # transcoder source changes far more rarely than the server does. So ask the source
   # itself. The tarball's top-level directory is named for the sha, and gzip decompresses
   # sequentially, so a range request for the first 16KB is enough to read it -- no need to
-  # pull 85MB just to find out nothing changed.
+  # pull the whole 15MB tarball just to find out nothing changed.
   check:
     runs-on: ubuntu-latest
     outputs:

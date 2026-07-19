@@ -55,7 +55,6 @@ bash ./configure \
   --enable-libshaderc \
   --enable-vaapi \
   --enable-libdrm \
-  --enable-opencl \
   --enable-libass \
   --enable-libdav1d \
   --enable-libopus \
@@ -84,6 +83,7 @@ echo "$PLEX_SHA" > "$OUT/PLEX_SOURCE_SHA"
 # serves "latest", so linking to it would rot the moment they publish again -- ship the
 # exact tarball this was built from instead, and let it travel with the binary.
 cp "$WORK/plex-ffmpeg.tar.gz" "$OUT/plex-ffmpeg-source-$PLEX_SHA.tar.gz"
+TARBALL_SHA256=$(sha256sum "$WORK/plex-ffmpeg.tar.gz" | cut -d' ' -f1)
 install -Dm644 LICENSE.md "$OUT/licenses/ffmpeg-LICENSE.md"
 install -Dm644 COPYING.LGPLv2.1 "$OUT/licenses/COPYING.LGPLv2.1"
 cat > "$OUT/licenses/SOURCE.txt" <<EOF
@@ -92,6 +92,7 @@ the configure flags in build.sh (notably --enable-vulkan --enable-libplacebo).
 
 Upstream source sha : $PLEX_SHA
 Obtained from       : $SRC_URL
+Tarball sha256      : $TARBALL_SHA256
 Corresponding source: plex-ffmpeg-source-$PLEX_SHA.tar.gz, alongside this file.
 
 ffmpeg is licensed LGPL v2.1 or later; see COPYING.LGPLv2.1 and ffmpeg-LICENSE.md.

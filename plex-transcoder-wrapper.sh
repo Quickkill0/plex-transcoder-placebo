@@ -25,13 +25,17 @@ exec_custom() {
     # driver instead. If VAAPI encoding ever breaks after a container bump, look here first.
     export LD_LIBRARY_PATH="/plex-placebo/lib:${LD_LIBRARY_PATH:-}"
     export LIBVA_DRIVERS_PATH="/plex-placebo/lib/dri"
-    export LIBDRM_AMDGPU_IDS="/plex-placebo/share/libdrm/amdgpu.ids"
     export VK_DRIVER_FILES="/plex-placebo/icd.d/radeon_icd.x86_64.json"
     export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
     export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/config/cache/placebo}"
     # Our build compiles h264/hevc in natively; Plex's codec blobs are musl-linked and
     # would fail to dlopen against a glibc binary.
     unset FFMPEG_EXTERNAL_LIBS
+    # Terminal by design: once exec'd we cannot fall back, and a runtime failure (GPU busy,
+    # /dev/dri perms, driver mismatch after a container bump) surfaces to Plex as a failed
+    # transcode. Retrying via the chain would mean buffering output to know whether the
+    # first attempt produced any, which is not worth the complexity for a case that means
+    # the mod is misconfigured anyway.
     exec "$CUSTOM" "$@"
 }
 

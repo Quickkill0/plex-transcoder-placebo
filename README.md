@@ -74,10 +74,10 @@ The wrapper falls back to the chained binary whenever it can't help, no `-filter
 software tone map, custom binary missing, or the rewrite not matching. Worst case is Plex's
 normal behaviour.
 
-**Check RADV is actually in use.** If the Vulkan driver isn't found, libplacebo falls back to
-`llvmpipe` (software Vulkan) and will be *slower* than stock. The mod bundles RADV and points
-`VK_DRIVER_FILES` at it, so this should be handled, but it's the first thing to check if results
-disappoint.
+**If the Vulkan driver can't be found, tone mapping fails loudly** (`Failed creating Vulkan
+device!`) rather than silently falling back to software rendering, the bundle deliberately ships
+only RADV, no `llvmpipe`. A dead transcode is easier to diagnose than one that quietly runs at a
+tenth the speed.
 
 ## Matching source to your server
 

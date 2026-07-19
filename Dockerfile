@@ -33,8 +33,16 @@ RUN bash collect-libs.sh "/src/dist/Plex Transcoder" /source/plex-placebo \
 
 COPY plex-transcoder-wrapper.sh /source/plex-placebo/bin/wrapper.sh
 COPY root/ /source/
-RUN chmod +x /source/plex-placebo/bin/wrapper.sh \
+
+# libdrm hardcodes this path -- there is no env override -- so amdgpu.ids has to land at
+# the real location or every transcode logs "No such file or directory". The vaapi-amdgpu
+# mod ships it here for the same reason.
+RUN install -Dm644 /usr/share/libdrm/amdgpu.ids /source/usr/share/libdrm/amdgpu.ids \
+    && chmod +x /source/plex-placebo/bin/wrapper.sh \
     && find /source/etc/s6-overlay -name run -exec chmod +x {} +
 
+# The lsio mod loader reads `.layers[0].digest` and downloads ONLY the first layer, so the
+# final stage must produce exactly one. Adding a second COPY here would silently ship half
+# the mod.
 FROM scratch
 COPY --from=build /source/ /
