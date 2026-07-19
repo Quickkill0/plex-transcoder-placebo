@@ -1,6 +1,4 @@
 #!/bin/sh
-# PLACEBO_WRAPPER_MARKER -- the init script greps for this to detect an existing install.
-#
 # Swaps Plex's software tone mapping for GPU libplacebo, and chains to whatever binary was
 # at this path before us for everything else.
 set -eu
