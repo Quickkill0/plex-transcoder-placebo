@@ -11,17 +11,20 @@ if [ ! -f "$TRANSCODER" ]; then
     exit 0
 fi
 
-# Only ever stash a real binary. A `docker restart` re-runs this against a filesystem we
-# already modified, and by then $TRANSCODER may be OUR wrapper or a peer mod's (the
-# vaapi-amdgpu mod wraps the same path). Moving a wrapper into $CHAINED would overwrite the
-# real binary with it and leave the two wrappers exec'ing each other forever.
+# Skip only if BOTH: the live file is a script (someone's wrapper), and we already have a
+# chain target. Each condition alone is wrong:
 #
-# Testing for a script rather than for our own marker also keeps this correct when Plex
-# updates in place: the new stock binary is real, so we re-wrap it instead of silently
-# skipping and leaving the mod inert.
+#   script alone      -> on a fresh boot where a peer mod (vaapi-amdgpu wraps this same
+#                        path) installed first, we'd see its wrapper and never install.
+#   $CHAINED alone    -> after Plex updates in place we'd skip the fresh stock binary and
+#                        sit inert.
+#
+# Together they mean "we have already inserted ourselves into this chain". Getting it wrong
+# in the other direction is destructive: moving a wrapper over a $CHAINED that holds the
+# real binary loses it, and leaves the wrappers exec'ing each other forever.
 magic=$(head -c2 "$TRANSCODER" 2>/dev/null || true)
-if [ "$magic" = '#!' ]; then
-    echo "[plex-placebo] a wrapper is already installed, nothing to do"
+if [ "$magic" = '#!' ] && [ -f "$CHAINED" ]; then
+    echo "[plex-placebo] already in the chain, nothing to do"
     exit 0
 fi
 
