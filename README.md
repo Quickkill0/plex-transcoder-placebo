@@ -50,6 +50,23 @@ Three deliberate deviations from Plex's own build:
 - **Libraries bundled.** libplacebo, Vulkan and RADV ship inside the mod, built on Ubuntu 24.04.
   glibc is forward-compatible, so this runs on newer containers without matching their version.
 
+## Requirements
+
+No specific GPU model is baked in; the Mesa stack is discovered at build time, not pinned; but the bundle does imply some floors:
+
+| | |
+|---|---|
+| GPU | Any AMD supported by Mesa's `radeonsi` + RADV, i.e. GCN 1.0 and newer (~2012+). Both the Vulkan and VA drivers come from the bundle, so the host container needs no Mesa of its own. |
+| Encoding | VAAPI H.264/HEVC encode needs VCE/VCN, present on GCN 1.0+. APUs and dGPUs both work. |
+| Container | **glibc >= 2.38.** Bundled libraries are built on Ubuntu 24.04; glibc is forward- but not backward-compatible, so Ubuntu 22.04-based images will *not* work. Current linuxserver/plex (26.04) is fine. |
+| Arch | x86_64 |
+| Base | linuxserver.io, or anything else running s6-overlay v3 with the mod loader |
+
+**More than one AMD GPU?** libplacebo takes the first RADV device, which may not be the one
+Plex's `-hwaccel_device` points at. The mod bundles Mesa's device-select layer, so
+`MESA_VK_DEVICE_SELECT=1002:xxxx` (vendor:device, from `lspci -nn`) forces the choice.
+Single-GPU systems need nothing.
+
 ## Composing with other mods
 
 The wrapper **chains** rather than assuming it owns the transcoder path: on install it moves

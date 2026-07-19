@@ -7,7 +7,7 @@ set -euo pipefail
 BIN="${1:?usage: collect-libs.sh <binary> <outdir>}"
 OUT="${2:?usage: collect-libs.sh <binary> <outdir>}"
 
-mkdir -p "$OUT/lib" "$OUT/lib/dri" "$OUT/icd.d"
+mkdir -p "$OUT/lib" "$OUT/lib/dri" "$OUT/icd.d" "$OUT/layer.d"
 
 # Core glibc is deliberately NOT bundled: LD_LIBRARY_PATH can't sanely mix a bundled
 # libc with the container's ld.so. Everything above libc is fair game, and shipping a
@@ -58,5 +58,21 @@ sed -E 's#("library_path"[[:space:]]*:[[:space:]]*")[^"]*#\1../lib/libvulkan_rad
     "$STOCK_ICD" > "$OUT/icd.d/radeon_icd.x86_64.json"
 grep -q '\.\./lib/libvulkan_radeon\.so' "$OUT/icd.d/radeon_icd.x86_64.json" \
     || { echo "ERROR: ICD manifest rewrite failed"; exit 1; }
+
+# Mesa's device-select layer. Only matters on machines with more than one AMD GPU, where
+# libplacebo would otherwise just take device 0 -- possibly not the one Plex was pointed at.
+# With this bundled, MESA_VK_DEVICE_SELECT=vendorid:deviceid works.
+SELECT_LAYER=$(find /usr/lib -name 'libVkLayer_MESA_device_select.so' -print -quit)
+SELECT_JSON=$(find /usr/share/vulkan -name 'VkLayer_MESA_device_select.json' -print -quit)
+if [ -n "$SELECT_LAYER" ] && [ -n "$SELECT_JSON" ]; then
+    cp -L "$SELECT_LAYER" "$OUT/lib/"
+    copy_deps "$SELECT_LAYER"
+    sed -E 's#("library_path"[[:space:]]*:[[:space:]]*")[^"]*#\1../lib/libVkLayer_MESA_device_select.so#' \
+        "$SELECT_JSON" > "$OUT/layer.d/VkLayer_MESA_device_select.json"
+    grep -q '\.\./lib/libVkLayer_MESA_device_select\.so' "$OUT/layer.d/VkLayer_MESA_device_select.json" \
+        || { echo "ERROR: device-select layer manifest rewrite failed"; exit 1; }
+else
+    echo "WARNING: mesa device-select layer not found; multi-GPU selection unavailable"
+fi
 
 echo "collected $(ls -1 "$OUT/lib" | wc -l) libs"

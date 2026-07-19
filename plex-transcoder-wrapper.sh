@@ -27,6 +27,10 @@ exec_custom() {
     export LIBVA_DRIVERS_PATH="/plex-placebo/lib/dri"
     export VK_DRIVER_FILES="/plex-placebo/icd.d/radeon_icd.x86_64.json"
     export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+    # Additive, so it can't hide the container's own layers. Only does anything when the
+    # user sets MESA_VK_DEVICE_SELECT to pick between multiple AMD GPUs; ignored by loaders
+    # too old to know the variable.
+    export VK_ADD_IMPLICIT_LAYER_PATH="/plex-placebo/layer.d"
     export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/config/cache/placebo}"
     # Our build compiles h264/hevc in natively; Plex's codec blobs are musl-linked and
     # would fail to dlopen against a glibc binary.
