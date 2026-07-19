@@ -1,0 +1,82 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image:
+        description: Base image to build in. Must match your Plex container's base, since libplacebo/vulkan/libva are dynamically linked (soname mismatch = binary won't load).
+        default: ubuntu:26.04
+      force:
+        description: Rebuild even if a release for this source sha already exists
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 4 * * 1'   # Monday, to pick up new Plex source drops
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ${{ github.event.inputs.base_image || 'ubuntu:26.04' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential curl ca-certificates pkg-config nasm git \
+            libplacebo-dev libvulkan-dev libshaderc-dev libva-dev libdrm-dev \
+            ocl-icd-opencl-dev libass-dev libdav1d-dev libopus-dev \
+            libvorbis-dev libxml2-dev libssl-dev libzvbi-dev
+
+      - name: Build
+        run: bash build.sh
+
+      - name: Read source sha
+        id: src
+        run: echo "sha=$(cat dist/PLEX_SOURCE_SHA)" >> "$GITHUB_OUTPUT"
+
+      # Plex's source only changes when they ship a new transcoder, so a scheduled run
+      # that finds an existing release has nothing to do.
+      - name: Skip if already released
+        id: check
+        run: |
+          tag="plex-${{ steps.src.outputs.sha }}"
+          if [ "${{ github.event.inputs.force }}" != "true" ] \
+             && git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          cd dist
+          tar -czf "../plex-transcoder-placebo-${{ steps.src.outputs.sha }}.tar.gz" \
+            "Plex Transcoder" PLEX_SOURCE_SHA
+          # LGPL: the corresponding source must stay available for as long as the binary is.
+          # Plex's URL serves only "latest", so attach the exact tarball this was built from.
+          cp ../work/plex-ffmpeg.tar.gz "../plex-ffmpeg-source-${{ steps.src.outputs.sha }}.tar.gz"
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.check.outputs.skip != 'true'
+        with:
+          tag_name: plex-${{ steps.src.outputs.sha }}
+          name: Plex Transcoder + libplacebo (${{ steps.src.outputs.sha }})
+          files: |
+            plex-transcoder-placebo-*.tar.gz
+            plex-ffmpeg-source-*.tar.gz
+          body: |
+            Plex Transcoder rebuilt from Plex's published source with `--enable-vulkan --enable-libplacebo`.
+
+            - Plex source sha: `${{ steps.src.outputs.sha }}`
+            - Built in: `${{ github.event.inputs.base_image || 'ubuntu:26.04' }}`
+
+            Verify this matches your server: the sha prefix should equal the directory name under
+            `Plex Media Server/Codecs/<sha>-<hash>-linux-x86_64/`.

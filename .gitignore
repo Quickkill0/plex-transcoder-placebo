@@ -1,0 +1,8 @@
+# Build scratch and outputs
+work/
+dist/
+
+# Research checkouts, regenerable via setup-branches.sh
+ffmpeg/
+plex-src/
+prior-art.git/
