@@ -1,15 +1,13 @@
 #!/bin/sh
-# MITM wrapper: installed at Plex's transcoder path, swaps software tone mapping for
-# GPU libplacebo, and execs the real binary for everything else.
+# PLACEBO_WRAPPER_MARKER -- the init script greps for this to detect an existing install.
 #
-# Install:
-#   mv "Plex Transcoder" "Plex Transcoder.orig"
-#   install -m755 plex-transcoder-wrapper.sh "Plex Transcoder"
+# Swaps Plex's software tone mapping for GPU libplacebo, and chains to whatever binary was
+# at this path before us for everything else.
 set -eu
 
 DIR=$(dirname "$0")
-REAL="$DIR/Plex Transcoder.orig"
-CUSTOM="${PLACEBO_TRANSCODER:-$DIR/Plex Transcoder.placebo}"
+CHAINED="$DIR/Plex Transcoder.preplacebo"
+CUSTOM="${PLACEBO_TRANSCODER:-/plex-placebo/bin/Plex-Transcoder-placebo}"
 
 # bt.2390 is the ITU reference curve; Plex's default `hable` is a film-emulation
 # approximation that crushes highlights by comparison.
@@ -17,17 +15,17 @@ PLACEBO='libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:c
 
 log() { [ -n "${PLACEBO_DEBUG:-}" ] && printf '%s\n' "$*" >> /tmp/plex-placebo.log || true; }
 
-# Non-tonemapping jobs stay on Plex's own binary: it has the EAE audio path and the
-# dlopen'd codec blobs, and there's nothing for us to improve there anyway.
+# Non-tonemapping jobs stay on the chained binary: it has the EAE audio path and Plex's
+# codec blobs, and there's nothing for us to improve there anyway.
 case " $* " in
     *" -filter_complex "*) ;;
-    *) exec "$REAL" "$@" ;;
+    *) exec "$CHAINED" "$@" ;;
 esac
 case "$*" in
     *tonemap=*) ;;
-    *) exec "$REAL" "$@" ;;
+    *) exec "$CHAINED" "$@" ;;
 esac
-[ -x "$CUSTOM" ] || { log "custom binary missing, falling back"; exec "$REAL" "$@"; }
+[ -x "$CUSTOM" ] || { log "custom binary missing, chaining"; exec "$CHAINED" "$@"; }
 
 # Rebuild argv, rewriting the filter graph in place.
 matched=
@@ -48,11 +46,19 @@ while [ "$n" -gt 0 ]; do
     set -- "$@" "$a"
 done
 
-[ -n "$matched" ] || { log "no rewrite applied, falling back"; exec "$REAL" "$@"; }
-log "rewrote: $*"
+[ -n "$matched" ] || { log "no rewrite applied, chaining"; exec "$CHAINED" "$@"; }
+
+# Bundled libplacebo/Vulkan first, so we get the versions this binary was built against
+# rather than whatever the container happens to ship. Any LD_LIBRARY_PATH already set
+# (e.g. by the vaapi-amdgpu mod) is preserved after ours -- we need its libva to encode.
+export LD_LIBRARY_PATH="/plex-placebo/lib:${LD_LIBRARY_PATH:-}"
+export VK_DRIVER_FILES="/plex-placebo/icd.d/radeon_icd.x86_64.json"
+export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/config/cache/placebo}"
 
 # Our build compiles h264/hevc in natively; Plex's codec blobs are musl-linked and
 # would fail to dlopen against a glibc binary.
 unset FFMPEG_EXTERNAL_LIBS
 
+log "rewrote: $*"
 exec "$CUSTOM" "$@"

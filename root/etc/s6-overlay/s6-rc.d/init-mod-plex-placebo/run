@@ -1,0 +1,31 @@
+#!/usr/bin/with-contenv bash
+# Installs the placebo transcoder wrapper over Plex's binary.
+set -eu
+
+PLEX_DIR="${PLEX_MEDIA_SERVER_HOME:-/usr/lib/plexmediaserver}"
+TRANSCODER="$PLEX_DIR/Plex Transcoder"
+CHAINED="$PLEX_DIR/Plex Transcoder.preplacebo"
+
+if [ ! -f "$TRANSCODER" ]; then
+    echo "[plex-placebo] $TRANSCODER not found, skipping"
+    exit 0
+fi
+
+# A plain `docker restart` re-runs this against a filesystem we already modified; without
+# this guard we'd stash our own wrapper as the chain target and lose the real binary.
+if grep -q 'PLACEBO_WRAPPER_MARKER' "$TRANSCODER" 2>/dev/null; then
+    echo "[plex-placebo] already installed"
+    exit 0
+fi
+
+# Chain to whatever is currently here rather than assuming it's the stock binary: the
+# vaapi-amdgpu mod also wraps the transcoder, and clobbering its wrapper would drop the
+# libva stack our own encoding depends on. Works in either mod order.
+mv -f "$TRANSCODER" "$CHAINED"
+install -m755 /plex-placebo/bin/wrapper.sh "$TRANSCODER"
+
+# libplacebo compiles Vulkan shaders at runtime and needs somewhere writable to cache them.
+mkdir -p /config/cache/placebo
+chown abc:abc /config/cache/placebo 2>/dev/null || true
+
+echo "[plex-placebo] installed (Plex source $(cat /plex-placebo/PLEX_SOURCE_SHA 2>/dev/null | cut -c1-7))"
