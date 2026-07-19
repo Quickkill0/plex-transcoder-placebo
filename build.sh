@@ -15,7 +15,8 @@ echo "==> Fetching Plex transcoder source"
 curl -sSL --compressed --max-time 600 "$SRC_URL" -o "$WORK/plex-ffmpeg.tar.gz"
 gunzip -c "$WORK/plex-ffmpeg.tar.gz" > "$WORK/plex-ffmpeg.tar"
 
-SRCDIR=$(tar -tf "$WORK/plex-ffmpeg.tar" | head -1 | cut -d/ -f1)
+# sed rather than `head -1`: head exits early, tar takes SIGPIPE, pipefail kills the build.
+SRCDIR=$(tar -tf "$WORK/plex-ffmpeg.tar" | sed -n '1{s|/.*||;p;}')
 # Tarball dir is plexinc-plex-media-server-ffmpeg-gpl-<sha>; the sha prefix also names the
 # Codecs/ dir of the matching PMS build, which is how you confirm source matches your server.
 PLEX_SHA="${SRCDIR##*-}"
@@ -37,7 +38,9 @@ echo "==> Configuring"
 #    them in avoids that ABI mess entirely (wrapper must unset FFMPEG_EXTERNAL_LIBS).
 #  - no --fatal-warnings: their clang/musl toolchain is clean, gcc/glibc is not.
 #  - static (ffmpeg default) rather than their --enable-shared + XORIGIN rpath dance.
-./configure \
+# Explicitly bash: Plex's "Fix hwaccel autodetection" block uses ${var/pat/sub}, which dash
+# (Ubuntu's /bin/sh) rejects with "Bad substitution".
+bash ./configure \
   --prefix="$OUT" \
   --enable-vulkan \
   --enable-libplacebo \
@@ -60,7 +63,11 @@ echo "==> Building"
 make -j"$(nproc)"
 
 install -Dm755 ffmpeg "$OUT/Plex Transcoder"
-"$OUT/Plex Transcoder" -hide_banner -filters | grep -q libplacebo \
+
+# Write to a file rather than piping: `grep -q` exits on first match, the binary takes
+# SIGPIPE, and pipefail reports that as a failed build.
+"$OUT/Plex Transcoder" -hide_banner -filters > "$WORK/filters.txt"
+grep -q libplacebo "$WORK/filters.txt" \
   || { echo "ERROR: built binary has no libplacebo filter"; exit 1; }
 
 echo "$PLEX_SHA" > "$OUT/PLEX_SOURCE_SHA"
