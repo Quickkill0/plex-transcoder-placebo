@@ -1,0 +1,7 @@
+# Whitelist: the research checkouts and build scratch are hundreds of MB and the image
+# needs none of it -- build.sh re-fetches the source inside the container.
+*
+!build.sh
+!collect-libs.sh
+!plex-transcoder-wrapper.sh
+!root
