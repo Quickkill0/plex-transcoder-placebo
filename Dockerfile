@@ -13,7 +13,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         libplacebo-dev libvulkan-dev libshaderc-dev libva-dev libdrm-dev \
         ocl-icd-opencl-dev libass-dev libdav1d-dev libopus-dev \
         libvorbis-dev libxml2-dev libssl-dev libzvbi-dev \
-        mesa-vulkan-drivers \
+        mesa-vulkan-drivers mesa-va-drivers libdrm-common \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

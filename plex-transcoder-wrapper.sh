@@ -25,6 +25,7 @@ exec_custom() {
     # driver instead. If VAAPI encoding ever breaks after a container bump, look here first.
     export LD_LIBRARY_PATH="/plex-placebo/lib:${LD_LIBRARY_PATH:-}"
     export LIBVA_DRIVERS_PATH="/plex-placebo/lib/dri"
+    export LIBDRM_AMDGPU_IDS="/plex-placebo/share/libdrm/amdgpu.ids"
     export VK_DRIVER_FILES="/plex-placebo/icd.d/radeon_icd.x86_64.json"
     export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
     export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/config/cache/placebo}"
