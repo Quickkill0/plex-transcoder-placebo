@@ -53,16 +53,14 @@ jobs:
           test -s ./transcoder
           echo "sha=$(cat sha.txt)" >> "$GITHUB_OUTPUT"
 
+      # Tag and push the image we already loaded, rather than building a second time.
+      # build.sh fetches Plex's *latest* source, so a rebuild could pick up a different
+      # release than the one we read the sha from and mislabel the :plex-<sha> tag.
       - name: Push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:plex-${{ steps.src.outputs.sha }}
-          cache-from: type=gha
+        run: |
+          docker tag ${{ env.IMAGE }}:latest ${{ env.IMAGE }}:plex-${{ steps.src.outputs.sha }}
+          docker push ${{ env.IMAGE }}:latest
+          docker push ${{ env.IMAGE }}:plex-${{ steps.src.outputs.sha }}
 
       - name: Summary
         run: |
