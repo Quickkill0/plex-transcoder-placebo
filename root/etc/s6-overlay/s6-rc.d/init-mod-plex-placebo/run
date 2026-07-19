@@ -1,14 +1,26 @@
 #!/usr/bin/with-contenv bash
 # Installs the placebo transcoder wrapper over Plex's binary.
-set -eu
+#
+# Deliberately never exits non-zero. This is a stage-2 oneshot and LSIO defaults to
+# S6_BEHAVIOUR_IF_STAGE2_FAILS=2, so a failure here would halt the whole container. A mod
+# that cannot install should leave Plex running stock, not take Plex down with it.
+set -u
 
 PLEX_DIR="${PLEX_MEDIA_SERVER_HOME:-/usr/lib/plexmediaserver}"
 TRANSCODER="$PLEX_DIR/Plex Transcoder"
 CHAINED="$PLEX_DIR/Plex Transcoder.preplacebo"
+WRAPPER=/plex-placebo/bin/wrapper.sh
 
-if [ ! -f "$TRANSCODER" ]; then
-    echo "[plex-placebo] $TRANSCODER not found, skipping"
-    exit 0
+bail() { echo "[plex-placebo] $1; leaving Plex stock" >&2; exit 0; }
+
+[ -f "$TRANSCODER" ] || bail "$TRANSCODER not found"
+[ -f "$WRAPPER" ]    || bail "mod payload missing at $WRAPPER"
+
+# Never stash our own wrapper as the chain target: that makes it exec itself forever. This
+# is reachable independently of the guard below, e.g. if $CHAINED is deleted but the
+# installed wrapper is left in place.
+if cmp -s "$TRANSCODER" "$WRAPPER"; then
+    bail "chain target missing but our wrapper is installed; refusing to self-chain"
 fi
 
 # Skip only if BOTH: the live file is a script (someone's wrapper), and we already have a
@@ -19,24 +31,27 @@ fi
 #   $CHAINED alone    -> after Plex updates in place we'd skip the fresh stock binary and
 #                        sit inert.
 #
-# Together they mean "we have already inserted ourselves into this chain". Getting it wrong
-# in the other direction is destructive: moving a wrapper over a $CHAINED that holds the
-# real binary loses it, and leaves the wrappers exec'ing each other forever.
-magic=$(head -c2 "$TRANSCODER" 2>/dev/null || true)
+# Together they mean "we are already in this chain". Getting it wrong in the other
+# direction is destructive: moving a wrapper over a $CHAINED holding the real binary loses
+# it, and leaves the wrappers exec'ing each other forever.
+magic=$(head -c2 "$TRANSCODER" 2>/dev/null)
 if [ "$magic" = '#!' ] && [ -f "$CHAINED" ]; then
     echo "[plex-placebo] already in the chain, nothing to do"
     exit 0
 fi
 
-# Chain to whatever is currently here rather than assuming it's the stock binary: the
-# vaapi-amdgpu mod also wraps the transcoder, and clobbering its wrapper would drop the
-# libva stack our own encoding depends on. Works in either mod order.
-mv -f "$TRANSCODER" "$CHAINED"
-install -m755 /plex-placebo/bin/wrapper.sh "$TRANSCODER"
+mv -f "$TRANSCODER" "$CHAINED" || bail "cannot stash the current transcoder"
+if ! install -m755 "$WRAPPER" "$TRANSCODER"; then
+    # Half-installed is worse than not installed: without this restore there'd be no
+    # transcoder at all and every playback needing one would fail.
+    mv -f "$CHAINED" "$TRANSCODER"
+    bail "cannot install wrapper, restored the original"
+fi
 
 # libplacebo compiles Vulkan shaders at runtime and caches them here. Non-fatal: a missing
 # cache costs a shader recompile per start, which is not worth failing the install over.
 mkdir -p /config/cache/placebo 2>/dev/null || true
 chown abc:abc /config/cache/placebo 2>/dev/null || true
 
-echo "[plex-placebo] installed (Plex source $(cat /plex-placebo/PLEX_SOURCE_SHA 2>/dev/null | cut -c1-7))"
+echo "[plex-placebo] installed (Plex source $(cut -c1-7 /plex-placebo/PLEX_SOURCE_SHA 2>/dev/null))"
+exit 0
