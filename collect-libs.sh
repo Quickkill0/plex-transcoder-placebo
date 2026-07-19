@@ -75,4 +75,4 @@ else
     echo "WARNING: mesa device-select layer not found; multi-GPU selection unavailable"
 fi
 
-echo "collected $(ls -1 "$OUT/lib" | wc -l) libs"
+echo "collected $(find "$OUT/lib" -maxdepth 1 -type f | wc -l) libs"

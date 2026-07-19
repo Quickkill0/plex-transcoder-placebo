@@ -70,6 +70,8 @@ check() {
     echo "  ok: $label"
 }
 
+# Word splitting on $order is the point: each string names the two mods to run, in order.
+# shellcheck disable=SC2086
 for order in "placebo vaapi" "vaapi placebo"; do
     setup; boot $order;              check "fresh boot, $order"; rm -rf "$SIM"
     setup; boot $order; boot $order; check "restart, $order";    rm -rf "$SIM"
