@@ -22,6 +22,14 @@ SRCDIR=$(tar -tf "$WORK/plex-ffmpeg.tar" | sed -n '1{s|/.*||;p;}')
 PLEX_SHA="${SRCDIR##*-}"
 echo "==> Source: $SRCDIR (sha ${PLEX_SHA:0:7})"
 
+# Plex serves only "latest", so what arrives can differ from what the caller resolved
+# earlier. Fail loudly rather than publishing an image tagged with a sha it isn't.
+EXPECT_SHA="${EXPECT_SHA:-unpinned}"
+if [ "$EXPECT_SHA" != unpinned ] && [ "$EXPECT_SHA" != "$PLEX_SHA" ]; then
+    echo "ERROR: expected source sha $EXPECT_SHA but got $PLEX_SHA"
+    exit 1
+fi
+
 rm -rf "${WORK:?}/$SRCDIR"
 tar -xf "$WORK/plex-ffmpeg.tar" -C "$WORK"
 cd "$WORK/$SRCDIR"
@@ -71,4 +79,22 @@ grep -q libplacebo "$WORK/filters.txt" \
   || { echo "ERROR: built binary has no libplacebo filter"; exit 1; }
 
 echo "$PLEX_SHA" > "$OUT/PLEX_SOURCE_SHA"
+
+# LGPL: a binary must be accompanied by its corresponding source. Plex's URL only ever
+# serves "latest", so linking to it would rot the moment they publish again -- ship the
+# exact tarball this was built from instead, and let it travel with the binary.
+cp "$WORK/plex-ffmpeg.tar.gz" "$OUT/plex-ffmpeg-source-$PLEX_SHA.tar.gz"
+install -Dm644 LICENSE.md "$OUT/licenses/ffmpeg-LICENSE.md"
+install -Dm644 COPYING.LGPLv2.1 "$OUT/licenses/COPYING.LGPLv2.1"
+cat > "$OUT/licenses/SOURCE.txt" <<EOF
+This binary is a build of Plex's published GPL/LGPL ffmpeg source, unmodified except for
+the configure flags in build.sh (notably --enable-vulkan --enable-libplacebo).
+
+Upstream source sha : $PLEX_SHA
+Obtained from       : $SRC_URL
+Corresponding source: plex-ffmpeg-source-$PLEX_SHA.tar.gz, alongside this file.
+
+ffmpeg is licensed LGPL v2.1 or later; see COPYING.LGPLv2.1 and ffmpeg-LICENSE.md.
+This build does not enable --enable-gpl.
+EOF
 echo "==> Done: $OUT/Plex Transcoder (source sha ${PLEX_SHA:0:7})"

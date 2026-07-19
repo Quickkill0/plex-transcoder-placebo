@@ -18,10 +18,18 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 
 WORKDIR /src
 COPY build.sh collect-libs.sh ./
-RUN bash build.sh
+
+# build.sh fetches whatever Plex is currently serving, but Docker caches this layer on the
+# script's contents alone. Without the sha in the layer key, a rebuild triggered by a new
+# Plex release would hit the cache and produce the OLD binary -- silently defeating the
+# whole point of the scheduled rebuild. The workflow passes the sha it resolved.
+ARG PLEX_SHA=unpinned
+RUN EXPECT_SHA="$PLEX_SHA" bash build.sh
 RUN bash collect-libs.sh "/src/dist/Plex Transcoder" /source/plex-placebo \
     && install -Dm755 "/src/dist/Plex Transcoder" /source/plex-placebo/bin/Plex-Transcoder-placebo \
-    && cp /src/dist/PLEX_SOURCE_SHA /source/plex-placebo/
+    && cp /src/dist/PLEX_SOURCE_SHA /source/plex-placebo/ \
+    && cp -r /src/dist/licenses /source/plex-placebo/ \
+    && cp /src/dist/plex-ffmpeg-source-*.tar.gz /source/plex-placebo/licenses/
 
 COPY plex-transcoder-wrapper.sh /source/plex-placebo/bin/wrapper.sh
 COPY root/ /source/
