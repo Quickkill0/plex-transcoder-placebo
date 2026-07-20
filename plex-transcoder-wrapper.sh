@@ -1,7 +1,12 @@
 #!/bin/sh
 # Swaps Plex's software tone mapping for GPU libplacebo, and chains to whatever binary was
 # at this path before us for everything else.
-set -u
+#
+# -f (noglob): filter graphs are full of [label] which are glob patterns. Nothing here wants
+# pathname expansion, and the graph-reassembly loop splits an unquoted string, so a file in
+# Plex's CWD matching a whole segment would otherwise corrupt the graph on the no-fallback
+# exec path. Disable it for the whole script rather than fencing one loop.
+set -uf
 
 # ${0%/*} rather than $(dirname "$0"): a command substitution here runs before every path
 # through this script, so a broken PATH would kill all transcoding, not just tone mapping.

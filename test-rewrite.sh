@@ -3,8 +3,10 @@
 # input chains instead of producing a graph that only fails after exec (at which point the
 # wrapper can no longer fall back, and Plex sees a dead transcode).
 #
-# If an ffmpeg with libplacebo is on PATH, each rewritten graph is also replayed through it
-# to prove it actually opens. Skipped otherwise, so this still runs in CI.
+# If an ffmpeg with libplacebo is on PATH, the in-place (non-zerocopy) rewritten graphs are
+# replayed through it to prove they open. The zerocopy graphs (scale_vaapi + hwdownload) can
+# only be checked structurally here -- replaying them needs a working VAAPI device, which CI
+# lacks; that path is validated on real hardware.
 set -uo pipefail
 REPO=$(cd "$(dirname "$0")" && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

@@ -73,7 +73,7 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck build.sh collect-libs.sh setup-branches.sh test-chain.sh
+          shellcheck build.sh collect-libs.sh setup-branches.sh test-chain.sh test-rewrite.sh
           # The wrapper is POSIX sh (dash in the container), the init script is bash.
           shellcheck -s sh plex-transcoder-wrapper.sh
           shellcheck -s bash root/etc/s6-overlay/s6-rc.d/init-mod-plex-placebo/run
