@@ -43,28 +43,29 @@ as-is.
 | Container | **glibc >= 2.38.** Ubuntu 22.04-based images will not work; current linuxserver/plex is fine. |
 | Arch | x86_64, s6-overlay v3 |
 
-## When it applies
-
-Only to transcodes that **downscale to 1080p or lower**. Anything else, including 4K→4K, is
-passed straight through to stock Plex: tone mapping at 4K is slower on the GPU than in
-software, and clients that can play 4K normally direct stream it. Raise `PLACEBO_MAX_HEIGHT`
-if your GPU is substantially bigger than an iGPU.
-
 ## Configuration
 
-All optional.
+All optional. By default the mod handles every HDR transcode at any resolution.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PLACEBO_TONEMAP` | your Plex setting | Force a curve. libplacebo adds `bt.2390`, `spline`, `bt.2446a`, `st2094-40`, `st2094-10`, `auto` on top of the six Plex offers. |
-| `PLACEBO_MAX_HEIGHT` | `1080` | Output height above which the mod stays out of the way. |
+| `PLACEBO_TONEMAP` | your Plex setting | Force a tone-mapping curve (see below). |
+| `PLACEBO_MAX_HEIGHT` | unset (no limit) | Cap the output height the mod will handle; taller jobs pass through to stock Plex. |
 | `PLACEBO_OPTS` | – | Extra libplacebo options, e.g. `contrast_recovery=0` or `peak_detect=0` to reduce highlight clipping. |
 | `PLACEBO_DEBUG` | – | Log every decision to `/tmp/plex-placebo.log`. |
 | `PLACEBO_NO_ZEROCOPY` | – | Keep Plex's software scale instead of moving it to the GPU. |
 
-`spline` is libplacebo's own default and a good first thing to try if you want a different
-look; `bt.2390` is the ITU reference curve and higher contrast, at the cost of clipping bright
-speculars more.
+**`PLACEBO_MAX_HEIGHT`** exists because tone mapping cost scales with resolution. On a
+dedicated GPU, leave it unset and 4K→4K is handled too. On a small iGPU, tone mapping at 4K
+is slower on the GPU than Plex's software path, so set e.g. `PLACEBO_MAX_HEIGHT=1080` to keep
+4K jobs on the CPU while still accelerating everything at 1080p and below (clients that can
+play 4K normally direct stream it anyway).
+
+**`PLACEBO_TONEMAP`**, your Plex *Tonemapping Algorithm* setting is used by default and every
+curve the Plex UI lists works. libplacebo also offers curves Plex can't select: `bt.2390`
+(ITU reference, higher contrast, clips bright speculars more), `spline` (libplacebo's own
+default, a good general-purpose look), `bt.2446a`, `st2094-40`/`st2094-10` (HDR10+ dynamic
+metadata), and `auto`.
 
 ## Troubleshooting
 
@@ -72,10 +73,10 @@ Set `PLACEBO_DEBUG=1`, play an HDR file that forces a transcode, then check
 `/tmp/plex-placebo.log`. A working rewrite shows `tonemap=<curve>` replaced by
 `libplacebo=...`.
 
-An empty log means the mod decided it couldn't help and passed the job to stock Plex, which
-it does whenever the output is above the height threshold, there's no software tone map in
-the graph, or the graph isn't a shape it can safely rewrite. That's the designed failure mode:
-worst case is Plex's normal behaviour.
+An empty log means the mod decided it couldn't help and passed the job to stock Plex: there's
+no software tone map in the graph, the graph isn't a shape it can safely rewrite, or the
+output exceeds `PLACEBO_MAX_HEIGHT` if you've set one. That's the designed failure mode: worst
+case is Plex's normal behaviour.
 
 If the Vulkan driver can't be found, tone mapping fails loudly (`Failed creating Vulkan
 device!`) rather than silently dropping to software rendering.

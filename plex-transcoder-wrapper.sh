@@ -79,25 +79,27 @@ for a in "$@"; do
 done
 [ -n "$graph" ] || { log "no tone map in a filter graph, chaining"; chain "$@"; }
 
-# Plex encodes the output resolution as scale filters in the graph. Tone mapping at 4K is
-# heavy shader work -- on a small iGPU it runs well under realtime and is slower than Plex's
-# software path -- while at 1080p it is comfortably faster and far cheaper on CPU. Clients
-# that can actually play 4K direct stream it, so a 4K-output transcode is rare and not worth
-# taking over. Only step in when we are downscaling to the threshold or below.
-max_h=0
-for h in $(printf '%s' "$graph" | grep -oE 'scale[^,;]*h=[0-9]+' | grep -oE '[0-9]+$') \
-         $(printf '%s' "$graph" | grep -oE 'scale=[0-9]+:[0-9]+' | cut -d: -f2); do
-    [ "$h" -gt "$max_h" ] && max_h=$h
-done
-if [ "$max_h" -eq 0 ]; then
-    # No scale filter means the output is the source resolution, which argv doesn't tell us.
-    # Chaining is the safe read: assuming 1080p would hand 4K jobs to the slow path.
-    log "no scale filter, cannot determine output height, chaining"
-    chain "$@"
-fi
-if [ "$max_h" -gt "${PLACEBO_MAX_HEIGHT:-1080}" ]; then
-    log "output height $max_h above threshold ${PLACEBO_MAX_HEIGHT:-1080}, chaining"
-    chain "$@"
+# Optional output-height gate. Unset means take every resolution; a value caps it. This is
+# for hardware where tone mapping at 4K is slower on the GPU than Plex's software path -- true
+# of small iGPUs -- so an operator there sets e.g. PLACEBO_MAX_HEIGHT=1080 to keep 4K jobs on
+# the CPU. A dedicated GPU that can sustain 4K leaves it unset.
+if [ -n "${PLACEBO_MAX_HEIGHT:-}" ]; then
+    # Plex writes the output resolution into the graph as scale filters.
+    max_h=0
+    for h in $(printf '%s' "$graph" | grep -oE 'scale[^,;]*h=[0-9]+' | grep -oE '[0-9]+$') \
+             $(printf '%s' "$graph" | grep -oE 'scale=[0-9]+:[0-9]+' | cut -d: -f2); do
+        [ "$h" -gt "$max_h" ] && max_h=$h
+    done
+    if [ "$max_h" -eq 0 ]; then
+        # No scale filter: the output is the source resolution, which argv doesn't reveal.
+        # With a cap set we can't confirm the job is under it, so chain.
+        log "no scale filter, cannot check PLACEBO_MAX_HEIGHT=$PLACEBO_MAX_HEIGHT, chaining"
+        chain "$@"
+    fi
+    if [ "$max_h" -gt "$PLACEBO_MAX_HEIGHT" ]; then
+        log "output height $max_h above PLACEBO_MAX_HEIGHT=$PLACEBO_MAX_HEIGHT, chaining"
+        chain "$@"
+    fi
 fi
 
 curve="${PLACEBO_TONEMAP:-}"
