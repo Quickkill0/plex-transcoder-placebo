@@ -122,6 +122,22 @@ else
     echo "FAIL: -metadata value was rewritten"; fail=1
 fi
 
+# PLACEBO_OPTS lands in a sed replacement, so anything outside option characters has to be
+# rejected rather than allowed to corrupt the filter graph.
+opts_out=$(PLACEBO_TRANSCODER="$T/custom" PLACEBO_NO_ZEROCOPY=1 PLACEBO_OPTS=contrast_recovery=0 \
+    "$T/Plex Transcoder" -filter_complex "${PRE}format=p010,tonemap=hable${POST}" 2>&1)
+case $opts_out in
+    *contrast_recovery=0:colorspace=bt709*) echo "  ok: PLACEBO_OPTS injected";;
+    *) echo "FAIL: PLACEBO_OPTS not injected"; fail=1;;
+esac
+bad_out=$(PLACEBO_TRANSCODER="$T/custom" PLACEBO_NO_ZEROCOPY=1 PLACEBO_OPTS='a=1/b&c' \
+    "$T/Plex Transcoder" -filter_complex "${PRE}format=p010,tonemap=hable${POST}" 2>&1)
+case $bad_out in
+    *'a=1/b&c'*) echo "FAIL: unsafe PLACEBO_OPTS reached the graph"; fail=1;;
+    *libplacebo=tonemapping=hable:colorspace*) echo "  ok: unsafe PLACEBO_OPTS rejected, graph intact";;
+    *) echo "FAIL: unsafe PLACEBO_OPTS broke the rewrite"; fail=1;;
+esac
+
 # --- GPU-side scaling restructure -------------------------------------------------------
 #
 # Plex's own graph downloads 4K frames and scales in software, then tone maps at 4K. Moving

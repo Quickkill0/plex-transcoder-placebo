@@ -113,7 +113,23 @@ case " $PLACEBO_CURVES " in
     *) log "curve '$curve' not supported by libplacebo, chaining"; chain "$@" ;;
 esac
 
-PLACEBO="libplacebo=tonemapping=$curve:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12"
+# PLACEBO_OPTS passes extra libplacebo options through, e.g.
+#   PLACEBO_OPTS=contrast_recovery=0        less highlight clipping
+#   PLACEBO_OPTS=peak_detect=0              no clipping at all, flatter image
+# Restricted to option-ish characters: this string lands in a sed replacement, where a
+# stray / or & would corrupt the whole filter graph. An option libplacebo rejects still
+# kills the job, since that only surfaces after exec.
+placebo_opts="${PLACEBO_OPTS:-}"
+if [ -n "$placebo_opts" ]; then
+    case $placebo_opts in
+        *[!A-Za-z0-9_.:=-]*)
+            log "PLACEBO_OPTS contains unsafe characters, ignoring: $placebo_opts"
+            placebo_opts=
+            ;;
+    esac
+fi
+
+PLACEBO="libplacebo=tonemapping=$curve:${placebo_opts:+$placebo_opts:}colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12"
 
 # Move the downscale onto the GPU and ahead of the tone map.
 #

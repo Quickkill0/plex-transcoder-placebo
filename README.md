@@ -104,6 +104,40 @@ punch. It's a one-line env change, so try both.
 An unrecognised curve makes the wrapper fall back to stock Plex, rather than emit a graph that
 would only fail after exec.
 
+### Highlight clipping
+
+libplacebo's dynamic peak detection maps the *measured* frame peak to white, which uses the
+output range far better than Plex's static mapping but puts the brightest speculars at or
+above nominal white. Measured on an HDR10 disc (4000-nit mastering peak, MaxCLL 729), as a
+percentage of pixels at Y>=235 over an 80s clip:
+
+| | clipped | mean luma |
+|---|---|---|
+| Plex software `hable` | 0.0002% | 41.10 |
+| libplacebo `bt.2390` | 0.0812% | 39.21 |
+| `bt.2390` + `contrast_recovery=0` | 0.0581% | 39.19 |
+| `bt.2390` + `percentile=100:contrast_recovery=0` | 0.0461% | 39.28 |
+| `spline` | 0.0460% | 39.06 |
+| `bt.2390` + `peak_detect=0` | 0.0001% | 40.06 |
+
+Worth knowing that mean luma barely moves: `bt.2390` is *higher contrast*, not brighter, and
+its average is actually below Plex's. Deeper blacks and lifted speculars read as "more HDR".
+
+`peak_detect=0` is the only setting that removes clipping outright, because it falls back to
+the disc's declared mastering peak and compresses hard enough that nothing reaches white,
+which is also why it looks flat. `tonemapping_param` (the bt.2390 knee) does not help; it
+made clipping slightly worse at every value tried.
+
+Pass any of these through with `PLACEBO_OPTS`:
+
+```yaml
+- PLACEBO_OPTS=contrast_recovery=0
+```
+
+Values are restricted to option characters, since the string is substituted into the filter
+graph. An option libplacebo rejects will still kill the transcode, because that only
+surfaces after the wrapper has exec'd and can no longer fall back.
+
 Three deliberate deviations from Plex's own build:
 
 - **Decoders compiled in.** Plex externalises h264/hevc into `dlopen`'d, musl-linked `.so` blobs
