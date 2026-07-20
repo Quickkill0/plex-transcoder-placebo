@@ -38,8 +38,37 @@ maintain. The mod rebuilds Plex's published GPL source with the flags on, bundle
 its Vulkan stack, and installs a wrapper that rewrites the filter graph at call time:
 
 ```
-[1]format=p010,tonemap=hable[2]   ->   [1]libplacebo=tonemapping=bt.2390:...[2]
+[1]format=p010,tonemap=hable[2]   ->   [1]libplacebo=tonemapping=hable:...[2]
 ```
+
+## Tone mapping curves
+
+**Your Plex setting is carried across, not overridden.** Every curve the Plex UI offers
+(`linear`, `gamma`, `clip`, `reinhard`, `hable`, `mobius`) exists in libplacebo under the same
+name, so the mod moves tone mapping onto the GPU without changing your chosen look.
+
+The quality gain comes from libplacebo's *implementation* rather than from the curve: dynamic
+peak detection, proper gamut mapping and contrast recovery, none of which ffmpeg's software
+`tonemap` does. So the same curve genuinely looks better, and HLG finally tone maps at all
+(Plex's filter ignores its own arguments and assumes PQ, so it silently doesn't).
+
+libplacebo also has curves Plex can't select. Set `PLACEBO_TONEMAP` to use one:
+
+| Curve | Notes |
+|---|---|
+| `bt.2390` | ITU-R reference EETF, designed for exactly this conversion and hue-preserving. Noticeably brighter than `hable`: mean luma 147 vs 107 on the same clip. |
+| `spline` | libplacebo's own default; generally the best general-purpose choice. |
+| `bt.2446a` | ITU-R Method A, an alternative reference approach. |
+| `st2094-40` / `st2094-10` | Use HDR10+ dynamic metadata when the source carries it. |
+| `auto` | Let libplacebo pick based on the source. |
+
+`hable` is a filmic *look* curve from Uncharted 2, not a conversion standard; it crushes
+highlights and darkens by design. `bt.2390` and `spline` are more faithful to the source, but
+"better" is partly taste here, and some people read the reference curves as flat next to hable's
+punch. It's a one-line env change, so try both.
+
+An unrecognised curve makes the wrapper fall back to stock Plex, rather than emit a graph that
+would only fail after exec.
 
 Three deliberate deviations from Plex's own build:
 

@@ -1,0 +1,98 @@
+#!/bin/bash
+# Tests the filter-graph rewrite: which curve comes out, and that malformed or unsupported
+# input chains instead of producing a graph that only fails after exec (at which point the
+# wrapper can no longer fall back, and Plex sees a dead transcode).
+#
+# If an ffmpeg with libplacebo is on PATH, each rewritten graph is also replayed through it
+# to prove it actually opens. Skipped otherwise, so this still runs in CI.
+set -uo pipefail
+REPO=$(cd "$(dirname "$0")" && pwd)
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+fail=0
+
+install -m755 "$REPO/plex-transcoder-wrapper.sh" "$T/Plex Transcoder"
+printf '#!/bin/sh\necho CHAINED\n' > "$T/Plex Transcoder.preplacebo"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@"\n' > "$T/custom"
+chmod +x "$T/Plex Transcoder.preplacebo" "$T/custom"
+
+# No pipe: `... | grep -q` would SIGPIPE ffmpeg, and pipefail would turn that into "no
+# libplacebo", silently skipping the graph replay that is the point of this suite.
+FF=""
+if command -v ffmpeg >/dev/null; then
+    filters=$(ffmpeg -hide_banner -filters 2>/dev/null || true)
+    case $filters in *libplacebo*) FF=ffmpeg;; esac
+fi
+
+PRE='[1:0]scale=64:64[ov];[0:0]scale=w=320:h=180[1];[1]'
+POST='[2];[2]format=pix_fmts=nv12[3];[3][ov]overlay[out]'
+
+# Returns the rewritten argv, or the literal CHAINED.
+run_wrapper() {
+    local graph=$1 override=${2:-}
+    if [ -n "$override" ]; then
+        PLACEBO_TRANSCODER="$T/custom" PLACEBO_TONEMAP="$override" "$T/Plex Transcoder" -filter_complex "$graph" 2>&1
+    else
+        PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" -filter_complex "$graph" 2>&1
+    fi
+}
+
+expect_curve() {
+    local label=$1 graph=$2 want=$3 override=${4:-} out curve
+    out=$(run_wrapper "$graph" "$override")
+    case $out in
+        *CHAINED*) echo "FAIL [$label]: chained, expected tonemapping=$want"; fail=1; return;;
+    esac
+    curve=$(printf '%s' "$out" | sed -nE 's/.*tonemapping=([^:]+).*/\1/p')
+    [ "$curve" = "$want" ] || { echo "FAIL [$label]: got tonemapping=$curve, want $want"; fail=1; return; }
+    if [ -n "$FF" ]; then
+        local g; g=$(printf '%s' "$out" | sed -n '2p')
+        "$FF" -hide_banner -f lavfi -i testsrc2=s=320x180:d=1 -f lavfi -i color=c=red:s=64x64:d=1 \
+            -filter_complex "$g" -map '[out]' -frames:v 1 -f null - >/dev/null 2>&1 \
+            || { echo "FAIL [$label]: rewritten graph does not open"; fail=1; return; }
+    fi
+    echo "  ok: $label -> $curve"
+}
+
+expect_chain() {
+    local label=$1 graph=$2 out
+    out=$(run_wrapper "$graph")
+    case $out in
+        *CHAINED*) echo "  ok: $label -> chained";;
+        *) echo "FAIL [$label]: rewrote instead of chaining ($out)"; fail=1;;
+    esac
+}
+
+# Plex's UI offers exactly these; the setting must survive, not be overridden.
+for c in linear gamma clip reinhard hable mobius; do
+    expect_curve "plex curve $c" "${PRE}format=p010,tonemap=$c${POST}" "$c"
+done
+
+# Curves Plex can't select but libplacebo supports.
+for c in bt.2390 spline bt.2446a st2094-40; do
+    expect_curve "override $c" "${PRE}format=p010,tonemap=hable${POST}" "$c" "$c"
+done
+
+# The tonemap filter's own options must not leak onto libplacebo's option list.
+expect_curve "options: desat"  "${PRE}format=p010,tonemap=hable:desat=0${POST}" hable
+expect_curve "options: param"  "${PRE}format=p010,tonemap=tonemap=mobius:param=1.0${POST}" mobius
+expect_curve "no format prefix" "${PRE}tonemap=reinhard${POST}" reinhard
+expect_curve "pix_fmts spelling" "${PRE}format=pix_fmts=p010,tonemap=hable${POST}" hable
+
+# Unknown curve must chain: an invalid tonemapping= value only fails once libplacebo
+# initialises, long after the wrapper has exec'd and lost its chance to fall back.
+expect_chain "unsupported curve" "${PRE}format=p010,tonemap=nosuchcurve${POST}"
+expect_chain "no tonemap at all" "${PRE}scale=64:64${POST}"
+
+# Args that merely contain the text must not be touched.
+out=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+      -metadata "title=learning tonemap=hable" \
+      -filter_complex "${PRE}format=p010,tonemap=hable${POST}" 2>&1)
+if printf '%s' "$out" | grep -q 'title=learning tonemap=hable'; then
+    echo "  ok: unrelated arg preserved"
+else
+    echo "FAIL: -metadata value was rewritten"; fail=1
+fi
+
+[ -n "$FF" ] || echo "  (note: no libplacebo ffmpeg on PATH; graphs not replayed)"
+[ "$fail" = 0 ] && echo "PASS: all rewrite scenarios"
+exit "$fail"

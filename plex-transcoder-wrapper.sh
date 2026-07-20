@@ -9,9 +9,11 @@ DIR=${0%/*}
 CHAINED="$DIR/Plex Transcoder.preplacebo"
 CUSTOM="${PLACEBO_TRANSCODER:-/plex-placebo/bin/Plex-Transcoder-placebo}"
 
-# bt.2390 is the ITU reference curve; Plex's default `hable` is a film-emulation
-# approximation that crushes highlights by comparison.
-PLACEBO='libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12'
+# Every curve Plex's UI offers (linear/gamma/clip/reinhard/hable/mobius) exists in
+# libplacebo under the same name, so the setting is carried across rather than overridden --
+# the mod's job is to move tone mapping onto the GPU, not to second-guess the user's look.
+# PLACEBO_TONEMAP forces a curve Plex can't select, e.g. bt.2390 or spline.
+PLACEBO_CURVES='auto clip st2094-40 st2094-10 bt.2390 bt.2446a spline reinhard mobius hable gamma linear'
 
 log() { [ -n "${PLACEBO_DEBUG:-}" ] && printf '%s\n' "$*" >> /tmp/plex-placebo.log; return 0; }
 
@@ -58,6 +60,37 @@ case "$*" in
     *) chain "$@" ;;
 esac
 [ -x "$CUSTOM" ] || { log "custom binary missing, chaining"; chain "$@"; }
+
+# Resolve the curve before rewriting anything, so an unrecognised one can still chain with
+# the original argv intact. Getting this wrong is expensive: an invalid `tonemapping=` value
+# only fails once libplacebo initialises, by which point we have exec'd and cannot fall back.
+curve="${PLACEBO_TONEMAP:-}"
+if [ -z "$curve" ]; then
+    prev=
+    for a in "$@"; do
+        case $prev in
+            -filter_complex|-vf|-filter:v|-filter:0)
+                case $a in
+                    *tonemap=*)
+                        # Handles `tonemap=hable`, `tonemap=hable:desat=0` and Plex's
+                        # `tonemap=tonemap=hable:param=1.0` spelling.
+                        curve=$(printf '%s' "$a" \
+                            | sed -nE 's/.*tonemap=(tonemap=)?([a-zA-Z0-9._-]+).*/\2/p')
+                        break
+                        ;;
+                esac
+                ;;
+        esac
+        prev=$a
+    done
+fi
+
+case " $PLACEBO_CURVES " in
+    *" $curve "*) ;;
+    *) log "curve '$curve' not supported by libplacebo, chaining"; chain "$@" ;;
+esac
+
+PLACEBO="libplacebo=tonemapping=$curve:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12"
 
 # Rebuild argv, rewriting only the value that follows a filter-graph flag. Rewriting any arg
 # containing `tonemap=` would corrupt e.g. a title or a filename that happened to contain it.
