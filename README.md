@@ -41,6 +41,31 @@ its Vulkan stack, and installs a wrapper that rewrites the filter graph at call 
 [1]format=p010,tonemap=hable[2]   ->   [1]libplacebo=tonemapping=hable:...[2]
 ```
 
+## When the mod steps in
+
+Only when the transcode **downscales to 1080p or lower**. Everything else chains straight
+through to stock Plex.
+
+Tone mapping is shader work, and its cost scales with output pixels. Measured on a Ryzen 7
+7800X3D's 2-CU Raphael iGPU, 335 frames of 4K HDR:
+
+| | wall | CPU |
+|---|---|---|
+| 4K→1080p, Plex software | 16.9s | 34.9s |
+| 4K→1080p, libplacebo | 17.4s | **17.2s** |
+| 4K→4K, Plex software | 19.5s | 79.0s |
+| 4K→4K, libplacebo | **31.2s** | 13.4s |
+
+At 4K output libplacebo is ~60% slower in wall clock and runs well below realtime, so it
+would make 4K transcodes worse, not better. It's also the case that anything able to play 4K
+generally direct streams it, making 4K-output transcodes rare. Raise `PLACEBO_MAX_HEIGHT` if
+your GPU is bigger than a 2-CU display adapter.
+
+Note the trade even in the good case: this buys **CPU**, not wall clock. That's the point, it frees cores for everything else on the box, but it won't make transcodes finish sooner.
+
+If the graph has no scale filter the output resolution isn't knowable from argv, so the mod
+chains rather than guess.
+
 ## Tone mapping curves
 
 **Your Plex setting is carried across, not overridden.** Every curve the Plex UI offers

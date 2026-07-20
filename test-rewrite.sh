@@ -23,6 +23,7 @@ if command -v ffmpeg >/dev/null; then
     case $filters in *libplacebo*) FF=ffmpeg;; esac
 fi
 
+# Mirrors Plex's real graph shape, including the scale that encodes the output resolution.
 PRE='[1:0]scale=64:64[ov];[0:0]scale=w=320:h=180[1];[1]'
 POST='[2];[2]format=pix_fmts=nv12[3];[3][ov]overlay[out]'
 
@@ -82,6 +83,28 @@ expect_curve "pix_fmts spelling" "${PRE}format=pix_fmts=p010,tonemap=hable${POST
 # initialises, long after the wrapper has exec'd and lost its chance to fall back.
 expect_chain "unsupported curve" "${PRE}format=p010,tonemap=nosuchcurve${POST}"
 expect_chain "no tonemap at all" "${PRE}scale=64:64${POST}"
+
+# Resolution gate. Tone mapping at 4K is heavy shader work that runs below realtime on a
+# small iGPU and loses to Plex's software path; 4K-output jobs are rare anyway because
+# clients that can play 4K direct stream it.
+expect_chain "4K output" \
+    '[1:0]scale=3840:2160[ov];[0:0]scale=w=3840:h=2160:force_divisible_by=4[1];[1]format=p010,tonemap=hable[2];[2]format=pix_fmts=nv12[3];[3][ov]overlay[out]'
+expect_chain "1440p output, above threshold" \
+    '[0:0]scale=w=2560:h=1440[1];[1]format=p010,tonemap=hable[2];[2]format=pix_fmts=nv12[out]'
+expect_chain "no scale, height unknowable" \
+    '[0:0]format=p010,tonemap=hable[out]'
+expect_curve "1080p output" \
+    '[1:0]scale=1920:1080[ov];[0:0]scale=w=1920:h=1080:force_divisible_by=4[1];[1]format=p010,tonemap=hable[2];[2]format=pix_fmts=nv12[3];[3][ov]overlay[out]' hable
+expect_curve "720p output" \
+    '[0:0]scale=w=1280:h=720[1];[1]format=p010,tonemap=mobius[2];[2]format=pix_fmts=nv12[out]' mobius
+
+# The threshold is overridable for anyone whose GPU can actually sustain 4K tone mapping.
+out=$(PLACEBO_TRANSCODER="$T/custom" PLACEBO_MAX_HEIGHT=2160 "$T/Plex Transcoder" \
+      -filter_complex '[0:0]scale=w=3840:h=2160[1];[1]format=p010,tonemap=hable[2];[2]format=pix_fmts=nv12[out]' 2>&1)
+case $out in
+    *libplacebo=*) echo "  ok: PLACEBO_MAX_HEIGHT raises the gate";;
+    *) echo "FAIL: PLACEBO_MAX_HEIGHT did not raise the gate"; fail=1;;
+esac
 
 # Args that merely contain the text must not be touched.
 out=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \

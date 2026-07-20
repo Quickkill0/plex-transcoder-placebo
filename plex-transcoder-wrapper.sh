@@ -61,28 +61,51 @@ case "$*" in
 esac
 [ -x "$CUSTOM" ] || { log "custom binary missing, chaining"; chain "$@"; }
 
-# Resolve the curve before rewriting anything, so an unrecognised one can still chain with
-# the original argv intact. Getting this wrong is expensive: an invalid `tonemapping=` value
-# only fails once libplacebo initialises, by which point we have exec'd and cannot fall back.
+# Find the filter graph up front. Everything below inspects it before any rewriting, so an
+# unsuitable job can still chain with the original argv intact. Getting that ordering wrong
+# is expensive: a bad graph only fails once libplacebo initialises, by which point we have
+# exec'd and can no longer fall back.
+graph=
+prev=
+for a in "$@"; do
+    case $prev in
+        -filter_complex|-vf|-filter:v|-filter:0)
+            case $a in
+                *tonemap=*) graph=$a; break ;;
+            esac
+            ;;
+    esac
+    prev=$a
+done
+[ -n "$graph" ] || { log "no tone map in a filter graph, chaining"; chain "$@"; }
+
+# Plex encodes the output resolution as scale filters in the graph. Tone mapping at 4K is
+# heavy shader work -- on a small iGPU it runs well under realtime and is slower than Plex's
+# software path -- while at 1080p it is comfortably faster and far cheaper on CPU. Clients
+# that can actually play 4K direct stream it, so a 4K-output transcode is rare and not worth
+# taking over. Only step in when we are downscaling to the threshold or below.
+max_h=0
+for h in $(printf '%s' "$graph" | grep -oE 'scale[^,;]*h=[0-9]+' | grep -oE '[0-9]+$') \
+         $(printf '%s' "$graph" | grep -oE 'scale=[0-9]+:[0-9]+' | cut -d: -f2); do
+    [ "$h" -gt "$max_h" ] && max_h=$h
+done
+if [ "$max_h" -eq 0 ]; then
+    # No scale filter means the output is the source resolution, which argv doesn't tell us.
+    # Chaining is the safe read: assuming 1080p would hand 4K jobs to the slow path.
+    log "no scale filter, cannot determine output height, chaining"
+    chain "$@"
+fi
+if [ "$max_h" -gt "${PLACEBO_MAX_HEIGHT:-1080}" ]; then
+    log "output height $max_h above threshold ${PLACEBO_MAX_HEIGHT:-1080}, chaining"
+    chain "$@"
+fi
+
 curve="${PLACEBO_TONEMAP:-}"
 if [ -z "$curve" ]; then
-    prev=
-    for a in "$@"; do
-        case $prev in
-            -filter_complex|-vf|-filter:v|-filter:0)
-                case $a in
-                    *tonemap=*)
-                        # Handles `tonemap=hable`, `tonemap=hable:desat=0` and Plex's
-                        # `tonemap=tonemap=hable:param=1.0` spelling.
-                        curve=$(printf '%s' "$a" \
-                            | sed -nE 's/.*tonemap=(tonemap=)?([a-zA-Z0-9._-]+).*/\2/p')
-                        break
-                        ;;
-                esac
-                ;;
-        esac
-        prev=$a
-    done
+    # Handles `tonemap=hable`, `tonemap=hable:desat=0` and Plex's
+    # `tonemap=tonemap=hable:param=1.0` spelling.
+    curve=$(printf '%s' "$graph" \
+        | sed -nE 's/.*tonemap=(tonemap=)?([a-zA-Z0-9._-]+).*/\2/p')
 fi
 
 case " $PLACEBO_CURVES " in
