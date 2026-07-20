@@ -5,7 +5,7 @@ A [linuxserver.io Docker Mod](https://github.com/linuxserver/docker-mods) that g
 
 ```yaml
 environment:
-  - DOCKER_MODS=ghcr.io/<user>/plex-transcoder-placebo:latest
+  - DOCKER_MODS=ghcr.io/bitnimble/plex-transcoder-placebo:latest
 devices:
   - /dev/dri:/dev/dri
 ```
