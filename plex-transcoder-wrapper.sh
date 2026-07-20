@@ -115,26 +115,109 @@ esac
 
 PLACEBO="libplacebo=tonemapping=$curve:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12"
 
+# Move the downscale onto the GPU and ahead of the tone map.
+#
+# Plex decodes on the GPU but omits -hwaccel_output_format, so every 4K frame is copied to
+# system memory and scaled there. Tone mapping then costs whatever libplacebo is handed, and
+# handing it 4K is four times the work of 1080p. Measured, 4K->1080p, 335 frames:
+#
+#   sw scale + sw tonemap (Plex today)      17.6s wall  32.9s cpu
+#   sw scale + libplacebo (in-place swap)   17.6s wall  18.0s cpu
+#   scale_vaapi then libplacebo at 1080p    11.6s wall   4.2s cpu
+#
+# Note it's the scale ordering that pays, not skipping the download: leaving the scale to
+# libplacebo and only avoiding the copy still took 18.2s. Downloading AFTER the GPU scale is
+# cheap (1080p nv12 is ~8x smaller than 4K p010) and keeps Plex's software subtitle overlay
+# working untouched downstream.
+#
+# Only the video chain may become scale_vaapi; the subtitle scale operates on software ARGB
+# and would fail. The video chain is found by following the label that feeds the tone map,
+# rather than by guessing from how the scale happens to be spelled.
+rewrite_graph() {
+    rg_g=$1
+    rg_tm=$(printf '%s' "$rg_g" | tr ';' '\n' | grep 'tonemap=' | head -1)
+    rg_tm_in=$(printf '%s' "$rg_tm" | sed -nE 's/^\[([^]]+)\].*/\1/p')
+    [ -n "$rg_tm_in" ] || return 1
+
+    rg_src=$(printf '%s' "$rg_g" | tr ';' '\n' | grep -E "\[$rg_tm_in\]\$" | head -1)
+    [ -n "$rg_src" ] || return 1
+    case $rg_src in
+        *scale=*) ;;
+        *) return 1 ;;
+    esac
+    # A segment with more than one filter is not a plain scale; don't restructure blind.
+    case $rg_src in
+        *,*) return 1 ;;
+    esac
+
+    rg_in=$(printf '%s' "$rg_src" | sed -nE 's/^\[([^]]+)\].*/\1/p')
+    [ -n "$rg_in" ] || return 1
+    rg_w=$(printf '%s' "$rg_src" | sed -nE 's/.*scale=w=([0-9]+):h=([0-9]+).*/\1/p')
+    rg_h=$(printf '%s' "$rg_src" | sed -nE 's/.*scale=w=([0-9]+):h=([0-9]+).*/\2/p')
+    if [ -z "$rg_w" ]; then
+        rg_w=$(printf '%s' "$rg_src" | sed -nE 's/.*scale=([0-9]+):([0-9]+).*/\1/p')
+        rg_h=$(printf '%s' "$rg_src" | sed -nE 's/.*scale=([0-9]+):([0-9]+).*/\2/p')
+    fi
+    [ -n "$rg_w" ] && [ -n "$rg_h" ] || return 1
+
+    rg_new_src="[$rg_in]scale_vaapi=w=$rg_w:h=$rg_h,hwdownload,format=p010le[$rg_tm_in]"
+    rg_new_tm=$(printf '%s' "$rg_tm" \
+        | sed -E "s/(format=(pix_fmts=)?p010,)?tonemap=[^],;[]+/$PLACEBO/g") || return 1
+    [ "$rg_new_tm" != "$rg_tm" ] || return 1
+
+    rg_out=
+    rg_oldifs=$IFS
+    IFS=';'
+    for rg_seg in $rg_g; do
+        if [ "$rg_seg" = "$rg_src" ]; then
+            rg_seg=$rg_new_src
+        elif [ "$rg_seg" = "$rg_tm" ]; then
+            rg_seg=$rg_new_tm
+        fi
+        rg_out="${rg_out}${rg_out:+;}${rg_seg}"
+    done
+    IFS=$rg_oldifs
+    printf '%s' "$rg_out"
+}
+
+zerocopy=
+if [ -z "${PLACEBO_NO_ZEROCOPY:-}" ]; then
+    new_graph=$(rewrite_graph "$graph") && [ -n "$new_graph" ] && zerocopy=1
+fi
+[ -n "$zerocopy" ] || log "graph not restructurable, falling back to in-place tonemap swap"
+
 # Rebuild argv, rewriting only the value that follows a filter-graph flag. Rewriting any arg
 # containing `tonemap=` would corrupt e.g. a title or a filename that happened to contain it.
 matched=
+added_hwfmt=
 prev=
 n=$#
 while [ "$n" -gt 0 ]; do
     a=$1; shift
     n=$((n - 1))
+
+    # The restructured graph expects VAAPI surfaces, so ask the decoder to keep them there.
+    # Goes immediately before the first -i, where ffmpeg reads input options.
+    if [ -n "$zerocopy" ] && [ -z "$added_hwfmt" ] && [ "$a" = "-i" ]; then
+        set -- "$@" -hwaccel_output_format vaapi
+        added_hwfmt=1
+    fi
+
     case $prev in
         -filter_complex|-vf|-filter:v|-filter:0)
             case $a in
                 *tonemap=*)
-                    # [^,[;]* consumes the filter's own options too. Matching only the
-                    # algorithm name would strip `tonemap=hable:desat=0` down to `hable`
-                    # and leave `:desat=0` dangling on libplacebo, which rejects it and
-                    # kills the job -- and by then `matched` has disabled the fallback.
-                    new=$(printf '%s' "$a" \
-                        | sed -E "s/(format=(pix_fmts=)?p010,)?tonemap=[^],;[]+/$PLACEBO/g") || new=$a
-                    [ "$new" != "$a" ] && matched=1
-                    a=$new
+                    if [ -n "$zerocopy" ]; then
+                        a=$new_graph
+                    else
+                        # [^,[;]* consumes the filter's own options too. Matching only the
+                        # algorithm name would strip `tonemap=hable:desat=0` down to `hable`
+                        # and leave `:desat=0` dangling on libplacebo, which rejects it and
+                        # kills the job -- and by then `matched` has disabled the fallback.
+                        a=$(printf '%s' "$a" \
+                            | sed -E "s/(format=(pix_fmts=)?p010,)?tonemap=[^],;[]+/$PLACEBO/g") || a=$prev
+                    fi
+                    matched=1
                     ;;
             esac
             ;;

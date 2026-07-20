@@ -46,22 +46,31 @@ its Vulkan stack, and installs a wrapper that rewrites the filter graph at call 
 Only when the transcode **downscales to 1080p or lower**. Everything else chains straight
 through to stock Plex.
 
-Tone mapping is shader work, and its cost scales with output pixels. Measured on a Ryzen 7
-7800X3D's 2-CU Raphael iGPU, 335 frames of 4K HDR:
+Tone mapping is shader work and its cost scales with the pixels libplacebo is handed, so the
+mod also moves the downscale onto the GPU and *ahead* of the tone map. Measured on a Ryzen 7
+7800X3D's 2-CU Raphael iGPU, 335 frames of 4K HDR to 1080p SDR:
 
 | | wall | CPU |
 |---|---|---|
-| 4K→1080p, Plex software | 16.9s | 34.9s |
-| 4K→1080p, libplacebo | 17.4s | **17.2s** |
-| 4K→4K, Plex software | 19.5s | 79.0s |
-| 4K→4K, libplacebo | **31.2s** | 13.4s |
+| Plex today: sw scale + sw tonemap | 17.6s | 32.9s |
+| in-place swap: sw scale + libplacebo | 17.6s | 18.0s |
+| libplacebo scales, from 4K sw frames | 28.0s | 13.5s |
+| libplacebo scales, no download | 18.2s | 4.9s |
+| **`scale_vaapi` first, libplacebo at 1080p** | **11.6s** | **4.2s** |
 
-At 4K output libplacebo is ~60% slower in wall clock and runs well below realtime, so it
-would make 4K transcodes worse, not better. It's also the case that anything able to play 4K
-generally direct streams it, making 4K-output transcodes rare. Raise `PLACEBO_MAX_HEIGHT` if
-your GPU is bigger than a 2-CU display adapter.
+**34% faster than Plex and 8x less CPU**, comfortably above realtime. Note it is the scale
+ordering that pays, not skipping the download: avoiding the copy while leaving the scale to
+libplacebo still took 18.2s, because it was then tone mapping at 4K.
 
-Note the trade even in the good case: this buys **CPU**, not wall clock. That's the point, it frees cores for everything else on the box, but it won't make transcodes finish sooner.
+At 4K *output* there is no downscale to exploit, and libplacebo runs ~60% slower than Plex's
+software path and well below realtime, so those jobs are left alone. Anything that can play
+4K generally direct streams it anyway. Raise `PLACEBO_MAX_HEIGHT` if your GPU is bigger than
+a 2-CU display adapter.
+
+Only the video chain becomes `scale_vaapi`; the subtitle scale works on software ARGB and
+would fail. The video chain is found by following the label that feeds the tone map, and a
+video segment carrying anything other than a bare scale falls back to swapping the tone map
+in place. `PLACEBO_NO_ZEROCOPY=1` disables the restructure entirely.
 
 If the graph has no scale filter the output resolution isn't knowable from argv, so the mod
 chains rather than guess.

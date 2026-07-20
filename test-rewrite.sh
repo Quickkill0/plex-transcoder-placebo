@@ -28,12 +28,18 @@ PRE='[1:0]scale=64:64[ov];[0:0]scale=w=320:h=180[1];[1]'
 POST='[2];[2]format=pix_fmts=nv12[3];[3][ov]overlay[out]'
 
 # Returns the rewritten argv, or the literal CHAINED.
+#
+# Zero-copy is disabled here on purpose: these cases test curve selection and option
+# handling, and the restructured graph needs a real VAAPI device to replay, which CI has
+# not got. The restructure has its own section below.
 run_wrapper() {
     local graph=$1 override=${2:-}
     if [ -n "$override" ]; then
-        PLACEBO_TRANSCODER="$T/custom" PLACEBO_TONEMAP="$override" "$T/Plex Transcoder" -filter_complex "$graph" 2>&1
+        PLACEBO_TRANSCODER="$T/custom" PLACEBO_NO_ZEROCOPY=1 PLACEBO_TONEMAP="$override" \
+            "$T/Plex Transcoder" -filter_complex "$graph" 2>&1
     else
-        PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" -filter_complex "$graph" 2>&1
+        PLACEBO_TRANSCODER="$T/custom" PLACEBO_NO_ZEROCOPY=1 \
+            "$T/Plex Transcoder" -filter_complex "$graph" 2>&1
     fi
 }
 
@@ -115,6 +121,50 @@ if printf '%s' "$out" | grep -q 'title=learning tonemap=hable'; then
 else
     echo "FAIL: -metadata value was rewritten"; fail=1
 fi
+
+# --- GPU-side scaling restructure -------------------------------------------------------
+#
+# Plex's own graph downloads 4K frames and scales in software, then tone maps at 4K. Moving
+# the scale to the GPU and ahead of the tone map measured 11.6s wall / 4.2s cpu against
+# 17.6s / 32.9s for Plex's shape. Only the video chain may be converted: the subtitle scale
+# works on software ARGB and would fail as scale_vaapi.
+PLEX_GRAPH='[0:2]scale=1920:1080[0];[0:0]scale=w=1920:h=1080:force_divisible_by=4[1];[1]format=p010,tonemap=hable[2];[2]format=pix_fmts=nv12[3];[3][0]overlay[4];[4]hwupload[5]'
+
+zc=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+     -hwaccel:0 vaapi -i /tmp/in.mkv -filter_complex "$PLEX_GRAPH" -map '[5]' 2>&1)
+
+check_zc() {
+    if printf '%s' "$zc" | grep -q -- "$2"; then
+        echo "  ok: $1"
+    else
+        echo "FAIL [zerocopy]: $1"; fail=1
+    fi
+}
+check_zc "-hwaccel_output_format injected"  '-hwaccel_output_format'
+check_zc "video scale moved to GPU"         'scale_vaapi=w=1920:h=1080,hwdownload,format=p010le'
+check_zc "subtitle scale left in software"  '\[0:2\]scale=1920:1080\[0\]'
+check_zc "curve preserved through rewrite"  'libplacebo=tonemapping=hable'
+check_zc "overlay preserved"                'overlay'
+
+# The escape hatch must fall back to the in-place swap, still replacing the tone map.
+zc_off=$(PLACEBO_TRANSCODER="$T/custom" PLACEBO_NO_ZEROCOPY=1 "$T/Plex Transcoder" \
+         -hwaccel:0 vaapi -i /tmp/in.mkv -filter_complex "$PLEX_GRAPH" -map '[5]' 2>&1)
+case $zc_off in
+    *scale_vaapi*) echo "FAIL [zerocopy]: PLACEBO_NO_ZEROCOPY did not disable restructure"; fail=1;;
+    *libplacebo=*) echo "  ok: PLACEBO_NO_ZEROCOPY falls back to in-place swap";;
+    *) echo "FAIL [zerocopy]: escape hatch lost the rewrite entirely"; fail=1;;
+esac
+
+# A video segment carrying more than a bare scale is not safe to restructure; it must fall
+# back to the in-place swap rather than emit a graph that only fails after exec.
+ODD='[0:0]scale=w=1920:h=1080,setsar=1[1];[1]format=p010,tonemap=hable[2];[2]format=pix_fmts=nv12[out]'
+odd_out=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+          -hwaccel:0 vaapi -i /tmp/in.mkv -filter_complex "$ODD" 2>&1)
+case $odd_out in
+    *scale_vaapi*) echo "FAIL [zerocopy]: restructured a graph it should not have"; fail=1;;
+    *libplacebo=*) echo "  ok: unrecognised video segment falls back to in-place swap";;
+    *) echo "FAIL [zerocopy]: lost the rewrite on an unrecognised segment"; fail=1;;
+esac
 
 [ -n "$FF" ] || echo "  (note: no libplacebo ffmpeg on PATH; graphs not replayed)"
 [ "$fail" = 0 ] && echo "PASS: all rewrite scenarios"
