@@ -12,6 +12,11 @@ devices:
 
 Not affiliated with or endorsed by Plex.
 
+The mod's own scripts are MIT (see `LICENSE`). The transcoder it builds is Plex's published
+GPL/LGPL ffmpeg source, unchanged apart from configure flags, and stays LGPL v2.1+: the image
+carries its licence texts and the exact source tarball it was built from under
+`/plex-placebo/licenses/`. The two don't conflict.
+
 ## Why
 
 Plex tone maps HDR **in software**. A typical 4K HDR transcode looks like:
