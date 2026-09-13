@@ -221,6 +221,14 @@ case $safe in
     *) echo "FAIL: safe VAAPI job incorrectly chained"; fail=1;;
 esac
 
+burn=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi -f dash dash \
+    -map 0:3 -f null - 2>&1)
+case $burn in
+    *CHAINED*) echo "  ok: subtitle burn-in secondary output remains on stock";;
+    *) echo "FAIL: multiple-output job entered custom build"; fail=1;;
+esac
+
 [ -n "$FF" ] || echo "  (note: no libplacebo ffmpeg on PATH; graphs not replayed)"
 [ "$fail" = 0 ] && echo "PASS: all rewrite scenarios"
 exit "$fail"

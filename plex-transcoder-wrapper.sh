@@ -85,9 +85,11 @@ done
 [ -n "$graph" ] || { log "no tone map in a filter graph, chaining"; chain "$@"; }
 
 # Keep job types the custom build cannot safely handle on the original chain.
-# Software encoder libraries are absent from this LGPL build. A separate subtitle
-# segment output also caused unbounded video buffering in real Plex playback.
+# Software encoder libraries are absent from this LGPL build. Both separate
+# subtitle segments and subtitle burn-in with a second null output exhausted the
+# bounded playback test's memory. Multiple outputs stay on stock until supported.
 prev=
+formats=0
 for a do
     case $prev in
         -codec|-codec:*|-c|-c:*|-vcodec)
@@ -97,8 +99,9 @@ for a do
                     chain "$@" ;;
             esac ;;
         -f)
-            if [ "$a" = segment ]; then
-                log "segment output is unsafe on this build; chaining"
+            formats=$((formats + 1))
+            if [ "$a" = segment ] || [ "$formats" -gt 1 ]; then
+                log "segment or multiple outputs are unsafe on this build; chaining"
                 chain "$@"
             fi ;;
     esac
