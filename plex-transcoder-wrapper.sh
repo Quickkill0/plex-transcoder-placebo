@@ -84,6 +84,27 @@ for a in "$@"; do
 done
 [ -n "$graph" ] || { log "no tone map in a filter graph, chaining"; chain "$@"; }
 
+# Keep job types the custom build cannot safely handle on the original chain.
+# Software encoder libraries are absent from this LGPL build. A separate subtitle
+# segment output also caused unbounded video buffering in real Plex playback.
+prev=
+for a do
+    case $prev in
+        -codec|-codec:*|-c|-c:*|-vcodec)
+            case $a in
+                libx264|libx265)
+                    log "software encoder requires the stock transcoder; chaining"
+                    chain "$@" ;;
+            esac ;;
+        -f)
+            if [ "$a" = segment ]; then
+                log "segment output is unsafe on this build; chaining"
+                chain "$@"
+            fi ;;
+    esac
+    prev=$a
+done
+
 # Optional output-height gate. Unset means take every resolution; a value caps it. This is
 # for hardware where tone mapping at 4K is slower on the GPU than Plex's software path -- true
 # of small iGPUs -- so an operator there sets e.g. PLACEBO_MAX_HEIGHT=1080 to keep 4K jobs on

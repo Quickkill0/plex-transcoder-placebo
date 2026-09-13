@@ -199,6 +199,28 @@ case $odd_out in
     *) echo "FAIL [zerocopy]: lost the rewrite on an unrecognised segment"; fail=1;;
 esac
 
+# Unsupported encoders and the separate subtitle output must never enter the
+# custom binary, even when the same job contains a valid HDR filter graph.
+for flag in -codec:0 -c:v -codec -c -vcodec; do
+    for codec in libx264 libx265; do
+        guarded=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder"             -filter_complex "$PLEX_GRAPH" "$flag" "$codec" -crf:0 16 2>&1)
+        case $guarded in
+            *CHAINED*) echo "  ok: $flag $codec remains on stock transcoder";;
+            *) echo "FAIL: unsupported encoder entered custom build"; fail=1;;
+        esac
+    done
+done
+subs=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder"     -hwaccel:0 vaapi -i movie.mkv -filter_complex "$PLEX_GRAPH"     -codec:0 h264_vaapi -f dash dash -map 0:3 -codec:0 ass     -f segment -segment_format ass 'sub-chunk-%05d' 2>&1)
+case $subs in
+    *CHAINED*) echo "  ok: separate subtitle output remains on stock transcoder";;
+    *) echo "FAIL: subtitle segment job entered custom build"; fail=1;;
+esac
+safe=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder"     -hwaccel:0 vaapi -i segment -filter_complex "$PLEX_GRAPH"     -metadata title=libx264 -codec:0 h264_vaapi -f dash dash 2>&1)
+case $safe in
+    *libplacebo=*) echo "  ok: VAAPI job and incidental names still rewritten";;
+    *) echo "FAIL: safe VAAPI job incorrectly chained"; fail=1;;
+esac
+
 [ -n "$FF" ] || echo "  (note: no libplacebo ffmpeg on PATH; graphs not replayed)"
 [ "$fail" = 0 ] && echo "PASS: all rewrite scenarios"
 exit "$fail"
