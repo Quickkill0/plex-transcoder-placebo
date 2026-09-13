@@ -199,8 +199,8 @@ case $odd_out in
     *) echo "FAIL [zerocopy]: lost the rewrite on an unrecognised segment"; fail=1;;
 esac
 
-# Unsupported encoders and the separate subtitle output must never enter the
-# custom binary, even when the same job contains a valid HDR filter graph.
+# Unsupported encoders always chain. Separate subtitle output requires an
+# explicit opt-in, even when the same job contains a valid HDR filter graph.
 for flag in -codec:0 -c:v -codec -c -vcodec; do
     for codec in libx264 libx265; do
         guarded=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder"             -filter_complex "$PLEX_GRAPH" "$flag" "$codec" -crf:0 16 2>&1)
@@ -228,6 +228,29 @@ case $burn in
     *CHAINED*) echo "  ok: subtitle burn-in secondary output remains on stock";;
     *) echo "FAIL: multiple-output job entered custom build"; fail=1;;
 esac
+
+for enabled in 1 0 true; do
+    subs=$(PLACEBO_EXPERIMENTAL_SUBTITLES="$enabled" PLACEBO_TRANSCODER="$T/custom"         "$T/Plex Transcoder" -hwaccel:0 vaapi -i movie.mkv         -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi -f dash dash         -map 0:3 -codec:0 ass -f segment -segment_format ass 'sub-%05d' 2>&1)
+    case "$enabled:$subs" in
+        1:*libplacebo=*|0:*CHAINED*|true:*CHAINED*)
+            echo "  ok: separate ASS subtitles opt-in=$enabled" ;;
+        *) echo "FAIL: unexpected subtitle opt-in result: $enabled"; fail=1 ;;
+    esac
+done
+for codec in libx264 libx265; do
+    guarded=$(PLACEBO_EXPERIMENTAL_SUBTITLES=1 PLACEBO_TRANSCODER="$T/custom"         "$T/Plex Transcoder" -filter_complex "$PLEX_GRAPH" -codec:0 "$codec"         -f dash dash -f segment -segment_format ass 'sub-%05d' 2>&1)
+    case $guarded in
+        *CHAINED*) echo "  ok: opt-in cannot bypass $codec guard" ;;
+        *) echo "FAIL: opt-in bypassed software encoder guard"; fail=1 ;;
+    esac
+done
+for secondary in null segment; do
+    guarded=$(PLACEBO_EXPERIMENTAL_SUBTITLES=1 PLACEBO_TRANSCODER="$T/custom"         "$T/Plex Transcoder" -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi         -f dash dash -f "$secondary" -segment_format srt 'sub-%05d' 2>&1)
+    case $guarded in
+        *CHAINED*) echo "  ok: opt-in rejects untested $secondary/srt output" ;;
+        *) echo "FAIL: opt-in accepted unsupported output"; fail=1 ;;
+    esac
+done
 
 [ -n "$FF" ] || echo "  (note: no libplacebo ffmpeg on PATH; graphs not replayed)"
 [ "$fail" = 0 ] && echo "PASS: all rewrite scenarios"

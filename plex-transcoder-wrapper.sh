@@ -84,12 +84,13 @@ for a in "$@"; do
 done
 [ -n "$graph" ] || { log "no tone map in a filter graph, chaining"; chain "$@"; }
 
-# Keep job types the custom build cannot safely handle on the original chain.
-# Software encoder libraries are absent from this LGPL build. Both separate
-# subtitle segments and subtitle burn-in with a second null output exhausted the
-# bounded playback test's memory. Multiple outputs stay on stock until supported.
+# Software encoder libraries are absent from this LGPL build. Multiple outputs
+# remain on stock by default. The patched filter scheduler has passed a short
+# subtitle test; an explicit opt-in permits DASH + ASS integration testing only.
 prev=
 formats=0
+muxers=
+segment_format=
 for a do
     case $prev in
         -codec|-codec:*|-c|-c:*|-vcodec)
@@ -100,13 +101,24 @@ for a do
             esac ;;
         -f)
             formats=$((formats + 1))
-            if [ "$a" = segment ] || [ "$formats" -gt 1 ]; then
-                log "segment or multiple outputs are unsafe on this build; chaining"
-                chain "$@"
-            fi ;;
+            muxers="$muxers $a" ;;
+        -segment_format) segment_format=$a ;;
     esac
     prev=$a
 done
+case "$muxers" in
+    *' segment'*) guarded_outputs=1 ;;
+    *) guarded_outputs=0 ;;
+esac
+if [ "$formats" -gt 1 ] || [ "$guarded_outputs" = 1 ]; then
+    if [ "${PLACEBO_EXPERIMENTAL_SUBTITLES:-}" = 1 ] &&
+       [ "$muxers" = ' dash segment' ] && [ "$segment_format" = ass ]; then
+        log "experimental DASH + ASS subtitle job enabled"
+    else
+        log "segment or multiple outputs require a supported opt-in; chaining"
+        chain "$@"
+    fi
+fi
 
 # Optional output-height gate. Unset means take every resolution; a value caps it. This is
 # for hardware where tone mapping at 4K is slower on the GPU than Plex's software path -- true
