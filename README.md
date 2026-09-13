@@ -45,12 +45,15 @@ as-is.
 
 ## Configuration
 
-All optional. By default the mod handles every HDR transcode at any resolution.
+All optional. The mod rewrites supported HDR transcodes at any resolution by default.
+Software-encoder jobs, subtitle burn-in, and multiple-output jobs stay on the original
+transcoder chain unless the specific subtitle opt-in below applies.
 
 | Variable | Default | Effect |
 |---|---|---|
 | `PLACEBO_TONEMAP` | your Plex setting | Force a tone-mapping curve (see below). |
 | `PLACEBO_MAX_HEIGHT` | unset (no limit) | Cap the output height the mod will handle; taller jobs pass through to stock Plex. |
+| `PLACEBO_EXPERIMENTAL_SUBTITLES` | unset (disabled) | Set to `1` to allow Plex DASH video/audio with a separate ASS subtitle-segment output. Other multiple-output jobs, subtitle burn-in, and jobs requiring libx264/libx265 still use the original transcoder chain. |
 | `PLACEBO_OPTS` | – | Extra libplacebo options, e.g. `contrast_recovery=0` or `peak_detect=0` to reduce highlight clipping. |
 | `PLACEBO_DEBUG` | – | Log every decision to `/tmp/plex-placebo.log`. |
 | `PLACEBO_NO_ZEROCOPY` | – | Keep Plex's software scale instead of moving it to the GPU. |
@@ -66,6 +69,27 @@ curve the Plex UI lists works. libplacebo also offers curves Plex can't select: 
 (ITU reference, higher contrast, clips bright speculars more), `spline` (libplacebo's own
 default, a good general-purpose look), `bt.2446a`, `st2094-40`/`st2094-10` (HDR10+ dynamic
 metadata), and `auto`.
+
+## Tested configuration and limits
+
+The patched build was tested with Plex 1.43.4, a Radeon 8060S APU, Linux 6.18.47,
+Mesa 25.2.8, and libplacebo 6.338.2. Plex Web 4.160.0 in Chrome 152 played a 4K
+HEVC HDR source transcoded to 1080p-class H.264 SDR, with AAC audio and separate
+subtitles. The running transcoder used VAAPI decoding/encoding and Vulkan/libplacebo
+tone mapping. Forward seeking and normal transcode throttling were also exercised.
+These were short playback checks, not an extended stability test.
+
+Use `PLACEBO_EXPERIMENTAL_SUBTITLES=1` to try the separate-subtitle path. Burning
+subtitles into the picture remains on the original transcoder chain.
+`PLACEBO_MAX_HEIGHT=1080` confines GPU tone mapping to the tested output-size range;
+4K output and other client/codec combinations were not verified by these checks.
+
+**Host-kernel warning:** a hardware test on Linux 6.18.38 hit an AMD driver fault in
+`amdgpu_hmm_invalidate_gfx`. Check that your kernel includes the
+[upstream userptr/VM lifetime fix](https://github.com/torvalds/linux/commit/631849ff5d603841e74f19f4a5e30fe1f7d7cf30)
+before testing this path on affected hardware. Container CPU and memory limits do
+not contain faults in the shared host GPU driver. A short passing run on a newer
+kernel does not rule out other driver faults. See [issue #2](https://github.com/bitnimble/plex-transcoder-placebo/issues/2).
 
 ## Troubleshooting
 
@@ -91,8 +115,9 @@ means Plex shipped a new transcoder; the scheduled build picks that up automatic
 ## Licence
 
 The mod's own scripts are MIT (see `LICENSE`). The transcoder it builds is Plex's published
-GPL/LGPL ffmpeg source, unchanged apart from configure flags, and stays LGPL v2.1+. The image
-ships its licence texts and the exact source tarball it was built from under
+GPL/LGPL ffmpeg source with the configure flags and patches applied by `build.sh`,
+and stays LGPL v2.1+. The image ships its licence texts and the modified
+corresponding source tarball under
 `/plex-placebo/licenses/`.
 
 ## Building locally
