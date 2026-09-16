@@ -2,8 +2,8 @@
 # Builds Plex Transcoder from Plex's published GPL source with Vulkan + libplacebo enabled.
 #
 # Plex ships ffmpeg 6.1.3, which already contains vf_libplacebo and the whole Vulkan stack;
-# they simply omit the flags at build time. So this is a flag flip plus one patch, the
-# output drain in patches/, without which a separate subtitle output starves the graph.
+# they simply omit the flags at build time. So this is mostly a flag flip, plus the output
+# drain in patches/ for as long as Plex's base is 6.x and still needs it.
 set -euo pipefail
 
 SRC_URL="${SRC_URL:-https://downloads.plex.tv/ffmpeg-source/}"
@@ -41,15 +41,36 @@ cd "$WORK/$SRCDIR"
 # change reports itself rather than surfacing as a hunk that won't apply.
 test -f libavfilter/vf_libplacebo.c || { echo "ERROR: vf_libplacebo.c absent; base changed"; exit 1; }
 
-# The patches only fit ffmpeg 6.x fftools: 7.0 replaced that scheduler with per-graph
-# threads, which removes the starvation they work around. A failure here on a new Plex base
-# means delete them, not port them.
-ls "$PATCH_DIR"/*.patch >/dev/null 2>&1 \
-  || { echo "ERROR: no patches found in $PATCH_DIR"; exit 1; }
-for patch_file in "$PATCH_DIR"/*.patch; do
-    echo "==> Applying ${patch_file##*/}"
-    patch --batch --fuzz=0 -p1 < "$patch_file"
-done
+# Plex serves only "latest", so the base moves under us without warning. The patches fit
+# ffmpeg 6.x fftools alone: 7.0 replaced that scheduler with per-filtergraph threads, which
+# removes the starvation they work around, so on 7+ the right answer is to skip them and
+# keep building rather than to fail every nightly until someone deletes them.
+#
+# An unreadable version is an error rather than a skip. Guessing wrong in that direction
+# ships a 6.x binary without the drain fix, which brings back the 4 GiB subtitle leak with
+# nothing anywhere to notice.
+test -f RELEASE || { echo "ERROR: no RELEASE file; cannot tell which ffmpeg this is"; exit 1; }
+FFMPEG_RELEASE=$(tr -d '[:space:]' < RELEASE)
+FFMPEG_MAJOR="${FFMPEG_RELEASE%%.*}"
+case $FFMPEG_MAJOR in
+    ''|*[!0-9]*) echo "ERROR: unrecognised ffmpeg release '$FFMPEG_RELEASE'"; exit 1 ;;
+esac
+
+PATCHED=0
+if [ "$FFMPEG_MAJOR" -ge 7 ]; then
+    echo "==> ffmpeg $FFMPEG_RELEASE: skipping patches, 7.0+ schedules filtergraphs itself"
+elif [ "$FFMPEG_MAJOR" -eq 6 ]; then
+    ls "$PATCH_DIR"/*.patch >/dev/null 2>&1 \
+      || { echo "ERROR: no patches found in $PATCH_DIR"; exit 1; }
+    for patch_file in "$PATCH_DIR"/*.patch; do
+        echo "==> Applying ${patch_file##*/}"
+        patch --batch --fuzz=0 -p1 < "$patch_file"
+    done
+    PATCHED=1
+else
+    echo "ERROR: ffmpeg $FFMPEG_RELEASE predates the tested base"
+    exit 1
+fi
 
 echo "==> Configuring"
 # Deviations from Plex's own configure, and why:
@@ -101,19 +122,28 @@ cp "$WORK/plex-ffmpeg.tar.gz" "$OUT/plex-ffmpeg-source-$PLEX_SHA.tar.gz"
 TARBALL_SHA256=$(sha256sum "$WORK/plex-ffmpeg.tar.gz" | cut -d' ' -f1)
 install -Dm644 LICENSE.md "$OUT/licenses/ffmpeg-LICENSE.md"
 install -Dm644 COPYING.LGPLv2.1 "$OUT/licenses/COPYING.LGPLv2.1"
-for patch_file in "$PATCH_DIR"/*.patch; do
-    install -Dm644 "$patch_file" "$OUT/licenses/patches/${patch_file##*/}"
-done
+if [ "$PATCHED" = 1 ]; then
+    for patch_file in "$PATCH_DIR"/*.patch; do
+        install -Dm644 "$patch_file" "$OUT/licenses/patches/${patch_file##*/}"
+    done
+    PATCH_NOTE='It also carries the patches in patches/ beside this file. Unpack the tarball
+and apply every one with "patch -p1" from the top of the source tree to reproduce it.'
+    CORRESPONDING="plex-ffmpeg-source-$PLEX_SHA.tar.gz plus patches/, beside this file."
+else
+    PATCH_NOTE="No patches were applied: ffmpeg $FFMPEG_RELEASE does not need them."
+    CORRESPONDING="plex-ffmpeg-source-$PLEX_SHA.tar.gz, beside this file."
+fi
 cat > "$OUT/licenses/SOURCE.txt" <<EOF
-This binary is a build of Plex's published GPL/LGPL ffmpeg source, modified by the patches
-in patches/ beside this file and by the configure flags in build.sh (notably
---enable-vulkan --enable-libplacebo). Unpack the tarball, apply every patch with "patch -p1"
-from the top of the source tree, and you have the source this binary was built from.
+This binary is a build of Plex's published GPL/LGPL ffmpeg source with the configure flags
+in build.sh (notably --enable-vulkan --enable-libplacebo).
 
+$PATCH_NOTE
+
+Upstream release    : $FFMPEG_RELEASE
 Upstream source sha : $PLEX_SHA
 Obtained from       : $SRC_URL
 Tarball sha256      : $TARBALL_SHA256
-Corresponding source: plex-ffmpeg-source-$PLEX_SHA.tar.gz plus patches/, beside this file.
+Corresponding source: $CORRESPONDING
 
 ffmpeg is licensed LGPL v2.1 or later; see COPYING.LGPLv2.1 and ffmpeg-LICENSE.md.
 This build does not enable --enable-gpl.

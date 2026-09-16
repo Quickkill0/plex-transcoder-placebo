@@ -79,6 +79,11 @@ output holds the scheduler, and the queued frames grow past 4 GiB. The build car
 for that (see `patches/`); the flag exists because the path has only had short playback
 tests, not extended running.
 
+That patch applies to ffmpeg 6.x only. `build.sh` reads the release out of the source it
+fetched and skips the patch from 7.0 on, where filtergraphs are scheduled on their own
+threads and cannot be starved this way. `licenses/SOURCE.txt` in the image records which of
+the two you have.
+
 **Host-kernel warning:** hardware testing on Linux 6.18.38 hit an AMD driver fault in
 `amdgpu_hmm_invalidate_gfx`. Check that your kernel carries the
 [upstream userptr/VM lifetime fix](https://github.com/torvalds/linux/commit/631849ff5d603841e74f19f4a5e30fe1f7d7cf30)
@@ -111,8 +116,8 @@ means Plex shipped a new transcoder; the scheduled build picks that up automatic
 
 The mod's own scripts are MIT (see `LICENSE`). The transcoder it builds is Plex's published
 GPL/LGPL ffmpeg source with the configure flags and patches applied by `build.sh`, and stays
-LGPL v2.1+. The image ships its licence texts, Plex's source tarball and the patches applied
-to it under `/plex-placebo/licenses/`.
+LGPL v2.1+. The image ships its licence texts, Plex's source tarball and whichever patches
+were applied to it under `/plex-placebo/licenses/`.
 
 ## Building locally
 
