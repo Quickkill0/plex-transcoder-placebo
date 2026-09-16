@@ -2,7 +2,8 @@
 # Builds Plex Transcoder from Plex's published GPL source with Vulkan + libplacebo enabled.
 #
 # Plex ships ffmpeg 6.1.3, which already contains vf_libplacebo and the whole Vulkan stack;
-# Enable those features and apply the output-draining fix for sparse subtitle jobs.
+# they simply omit the flags at build time. So this is a flag flip plus one patch, the
+# output drain in patches/, without which a separate subtitle output starves the graph.
 set -euo pipefail
 
 SRC_URL="${SRC_URL:-https://downloads.plex.tv/ffmpeg-source/}"
@@ -35,16 +36,20 @@ rm -rf "${WORK:?}/$SRCDIR"
 tar -xf "$WORK/plex-ffmpeg.tar" -C "$WORK"
 cd "$WORK/$SRCDIR"
 
-test -f "$PATCH_DIR/0001-drain-libplacebo-graphs.patch"
+# Sanity: bail loudly if Plex ever drops to a base without libplacebo, rather than
+# silently producing a transcoder that can't tone map. Ahead of the patches, so a base
+# change reports itself rather than surfacing as a hunk that won't apply.
+test -f libavfilter/vf_libplacebo.c || { echo "ERROR: vf_libplacebo.c absent; base changed"; exit 1; }
+
+# The patches only fit ffmpeg 6.x fftools: 7.0 replaced that scheduler with per-graph
+# threads, which removes the starvation they work around. A failure here on a new Plex base
+# means delete them, not port them.
+ls "$PATCH_DIR"/*.patch >/dev/null 2>&1 \
+  || { echo "ERROR: no patches found in $PATCH_DIR"; exit 1; }
 for patch_file in "$PATCH_DIR"/*.patch; do
+    echo "==> Applying ${patch_file##*/}"
     patch --batch --fuzz=0 -p1 < "$patch_file"
 done
-# Archive the modified source before configure/build add generated files.
-tar -czf "$OUT/plex-ffmpeg-source-$PLEX_SHA.tar.gz" -C "$WORK" "$SRCDIR"
-
-# Sanity: bail loudly if Plex ever drops to a base without libplacebo, rather than
-# silently producing a transcoder that can't tone map.
-test -f libavfilter/vf_libplacebo.c || { echo "ERROR: vf_libplacebo.c absent; base changed"; exit 1; }
 
 echo "==> Configuring"
 # Deviations from Plex's own configure, and why:
@@ -75,7 +80,7 @@ bash ./configure \
   --disable-debug
 
 echo "==> Building"
-make -j"${BUILD_JOBS:-$(nproc)}"
+make -j"$(nproc)"
 
 install -Dm755 ffmpeg "$OUT/Plex Transcoder"
 
@@ -89,18 +94,26 @@ echo "$PLEX_SHA" > "$OUT/PLEX_SOURCE_SHA"
 
 # LGPL: a binary must be accompanied by its corresponding source. Plex's URL only ever
 # serves "latest", so linking to it would rot the moment they publish again -- ship the
-# exact tarball this was built from instead, and let it travel with the binary.
-TARBALL_SHA256=$(sha256sum "$OUT/plex-ffmpeg-source-$PLEX_SHA.tar.gz" | cut -d' ' -f1)
+# exact tarball this was built from instead, and let it travel with the binary. Tarball
+# plus patches rather than a re-rolled patched tree: a locally created tar varies run to
+# run, so its sha256 would prove nothing, while Plex's own bytes stay checkable.
+cp "$WORK/plex-ffmpeg.tar.gz" "$OUT/plex-ffmpeg-source-$PLEX_SHA.tar.gz"
+TARBALL_SHA256=$(sha256sum "$WORK/plex-ffmpeg.tar.gz" | cut -d' ' -f1)
 install -Dm644 LICENSE.md "$OUT/licenses/ffmpeg-LICENSE.md"
 install -Dm644 COPYING.LGPLv2.1 "$OUT/licenses/COPYING.LGPLv2.1"
+for patch_file in "$PATCH_DIR"/*.patch; do
+    install -Dm644 "$patch_file" "$OUT/licenses/patches/${patch_file##*/}"
+done
 cat > "$OUT/licenses/SOURCE.txt" <<EOF
-This binary uses Plex's published GPL/LGPL ffmpeg source with the patches applied by
-build.sh and Vulkan/libplacebo enabled. The archive contains the modified source.
+This binary is a build of Plex's published GPL/LGPL ffmpeg source, modified by the patches
+in patches/ beside this file and by the configure flags in build.sh (notably
+--enable-vulkan --enable-libplacebo). Unpack the tarball, apply every patch with "patch -p1"
+from the top of the source tree, and you have the source this binary was built from.
 
 Upstream source sha : $PLEX_SHA
 Obtained from       : $SRC_URL
 Tarball sha256      : $TARBALL_SHA256
-Corresponding source: plex-ffmpeg-source-$PLEX_SHA.tar.gz, alongside this file.
+Corresponding source: plex-ffmpeg-source-$PLEX_SHA.tar.gz plus patches/, beside this file.
 
 ffmpeg is licensed LGPL v2.1 or later; see COPYING.LGPLv2.1 and ffmpeg-LICENSE.md.
 This build does not enable --enable-gpl.

@@ -43,9 +43,11 @@ def exercise(binary, root, fixture):
             if process.returncode:
                 raise RuntimeError((root / "stderr.log").read_text()[-3000:])
         finally:
+            # No timeout: this runs while an exception may be propagating, and a raise here
+            # would replace the budget or exit-status failure with a bare TimeoutExpired.
             if process.poll() is None:
                 process.kill()
-            process.wait(timeout=5)
+            process.wait()
     progress = (root / "progress.txt").read_text()
     frames = re.findall(r"^frame=(\d+)$", progress, re.M)
     subtitles = "\n".join(p.read_text() for p in root.glob("subs*.ass"))
